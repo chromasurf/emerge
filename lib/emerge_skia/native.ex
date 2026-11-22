@@ -209,6 +209,7 @@ defmodule EmergeSkia.Native do
           required(:scroll_deceleration) => :android | :ios,
           required(:scrollbars) => :always | :while_scrolling,
           required(:hw_cursor) => boolean(),
+          required(:drm_cursor_size) => 1..64 | nil,
           required(:input_log) => boolean(),
           required(:render_log) => boolean(),
           required(:close_signal_log) => boolean(),
