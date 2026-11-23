@@ -2096,6 +2096,14 @@ struct StartConfig {
         allow(dead_code)
     )]
     scroll_deceleration: events::ScrollDeceleration,
+    #[cfg_attr(
+        not(any(
+            all(feature = "wayland", target_os = "linux"),
+            all(feature = "drm", target_os = "linux")
+        )),
+        allow(dead_code)
+    )]
+    scrollbars: events::ScrollbarVisibility,
     #[cfg_attr(not(all(feature = "drm", target_os = "linux")), allow(dead_code))]
     asset_config: AssetConfig,
     #[cfg_attr(not(all(feature = "drm", target_os = "linux")), allow(dead_code))]
@@ -2245,6 +2253,7 @@ struct StartOptsNif {
     scroll_line_pixels: f32,
     scroll_bounce: bool,
     scroll_deceleration: events::ScrollDeceleration,
+    scrollbars: events::ScrollbarVisibility,
     drm_card: Option<String>,
     #[cfg_attr(not(all(feature = "drm", target_os = "linux")), allow(dead_code))]
     drm_output: Option<String>,
@@ -3031,6 +3040,7 @@ fn start_native_renderer_with_config(
         scroll_line_pixels: config.scroll_line_pixels,
         scroll_bounce: config.scroll_bounce,
         scroll_deceleration: config.scroll_deceleration,
+        scrollbars: config.scrollbars,
         log_render,
         native_log: Arc::clone(&native_log),
         system_clipboard,
@@ -3156,6 +3166,7 @@ fn start(
                 scroll_line_pixels: input::SCROLL_LINE_PIXELS,
                 scroll_bounce: false,
                 scroll_deceleration: Default::default(),
+                scrollbars: Default::default(),
                 asset_config: AssetConfig::default(),
                 drm_power: None,
                 drm_backlight: None,
@@ -3247,6 +3258,7 @@ fn start_opts(env: Env, opts: StartOptsNif) -> NifResult<ResourceArc<RendererRes
             scroll_line_pixels: opts.scroll_line_pixels,
             scroll_bounce: opts.scroll_bounce,
             scroll_deceleration: opts.scroll_deceleration,
+            scrollbars: opts.scrollbars,
             asset_config,
             drm_power: opts.drm_power,
             drm_backlight: opts.drm_backlight,
@@ -4532,6 +4544,7 @@ fn test_harness_new(width: u32, height: u32) -> Result<ResourceArc<TestHarnessRe
         scroll_line_pixels: input::SCROLL_LINE_PIXELS,
         scroll_bounce: false,
         scroll_deceleration: Default::default(),
+        scrollbars: Default::default(),
         log_render: false,
         native_log: Arc::new(NativeLogRelay::default()),
         system_clipboard: false,
@@ -4840,6 +4853,7 @@ mod tests {
                 scroll_line_pixels: input::SCROLL_LINE_PIXELS,
                 scroll_bounce: false,
                 scroll_deceleration: Default::default(),
+                scrollbars: Default::default(),
                 log_render: false,
                 native_log: Arc::new(NativeLogRelay::default()),
                 system_clipboard: false,
@@ -4944,6 +4958,7 @@ mod tests {
                 scroll_line_pixels: input::SCROLL_LINE_PIXELS,
                 scroll_bounce: false,
                 scroll_deceleration: Default::default(),
+                scrollbars: Default::default(),
                 log_render: false,
                 native_log: Arc::new(NativeLogRelay::default()),
                 system_clipboard: false,
