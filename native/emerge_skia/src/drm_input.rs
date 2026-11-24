@@ -130,6 +130,8 @@ struct KeyboardRepeat {
 pub struct DrmInput {
     context: Option<Context>,
     devices: HashMap<PathBuf, (u64, u64)>,
+    /// Nodes libinput refused, by identity; retried only when the node or /dev/input changes.
+    rejected: HashMap<PathBuf, (u64, u64)>,
     discovery: Option<OwnedFd>,
     contacts: Contacts,
     touch_wake: touch_wake::TouchWake,
@@ -174,6 +176,7 @@ impl DrmInput {
         let mut input = Self {
             context,
             devices: HashMap::new(),
+            rejected: HashMap::new(),
             discovery: None,
             contacts: Contacts::default(),
             touch_wake: touch_wake::TouchWake::default(),
@@ -238,6 +241,7 @@ impl DrmInput {
                 break;
             }
             if self.discovery.as_ref().is_some_and(drain_discovery) {
+                self.rejected.clear();
                 self.rescan_devices();
             }
             self.poll();
@@ -337,16 +341,7 @@ impl DrmInput {
         {
             self.dispatch_event(event);
         }
-        if let Some(ctx) = self.context.as_mut() {
-            for path in paths {
-                if !self.devices.contains_key(&path)
-                    && let Some(identity) = device_identity(&path)
-                    && ctx.add(&path)
-                {
-                    self.devices.insert(path, identity);
-                }
-            }
-        }
+        self.add_devices(paths);
         // Recreate the watch as well: /dev/input can appear late or be replaced.
         self.discovery = discovery_watch();
     }
@@ -465,6 +460,28 @@ impl DrmInput {
                 }
             }
             _ => {}
+        }
+    }
+    /// Opening a node libinput refuses blocks this thread for tens of milliseconds,
+    /// so a refused node is not opened again while its identity stays the same.
+    fn add_devices(&mut self, paths: Vec<PathBuf>) {
+        let Some(ctx) = self.context.as_mut() else {
+            return;
+        };
+        self.rejected.retain(|path, _| paths.contains(path));
+        let candidates: Vec<_> = paths
+            .into_iter()
+            .filter(|path| !self.devices.contains_key(path))
+            .filter_map(|path| device_identity(&path).map(|identity| (path, identity)))
+            .filter(|(path, identity)| self.rejected.get(path) != Some(identity))
+            .collect();
+        for (path, identity) in candidates {
+            if ctx.add(&path) {
+                self.rejected.remove(&path);
+                self.devices.insert(path, identity);
+            } else {
+                self.rejected.insert(path, identity);
+            }
         }
     }
     fn recompute_modifiers(&mut self) {
@@ -925,6 +942,7 @@ mod tests {
         let input = DrmInput {
             context: Some(Context::new().unwrap()),
             devices: HashMap::new(),
+            rejected: HashMap::new(),
             discovery: None,
             contacts: Contacts::default(),
             touch_wake: touch_wake::TouchWake::default(),
@@ -958,6 +976,17 @@ mod tests {
         fn request_stop(&self) {}
         fn request_redraw(&self) {}
         fn notify_video_frame(&self) {}
+    }
+
+    #[test]
+    fn a_refused_node_is_remembered_until_it_leaves_the_listing() {
+        let (mut input, _rx, _) = test_input(1);
+        let null = PathBuf::from("/dev/null");
+        input.add_devices(vec![null.clone()]);
+        assert!(!input.devices.contains_key(&null));
+        assert_eq!(input.rejected.get(&null), device_identity(&null).as_ref());
+        input.add_devices(vec![]);
+        assert!(input.rejected.is_empty());
     }
 
     #[test]
