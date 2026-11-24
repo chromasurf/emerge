@@ -63,6 +63,8 @@ defmodule Emerge.UI.Nearby do
   `behind_content/1` for decorative backgrounds, and ordinary noninteractive
   children for markers that must not cover a control with a front nearby scope.
   Keep front nearby content for actual overlays such as menus and popups.
+  A decorative overlay in front of content sets `Emerge.UI.pass_pointer/0` on its
+  root; input inside it then reaches the elements behind it.
 
   An event's coordinates belong to its listener element, not the nearby host.
   See `Emerge.UI.Event` for coordinate and captured-drag rules.

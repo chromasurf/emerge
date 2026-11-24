@@ -465,6 +465,7 @@ fn plain_text_leaf_attrs(attrs: &Attrs) -> bool {
 
 fn attrs_affect_interaction_or_registry(attrs: &Attrs) -> bool {
     attrs.on_click.unwrap_or(false)
+        || attrs.pass_pointer.unwrap_or(false)
         || attrs.on_mouse_down.unwrap_or(false)
         || attrs.on_mouse_up.unwrap_or(false)
         || attrs.on_mouse_enter.unwrap_or(false)

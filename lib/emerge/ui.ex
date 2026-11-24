@@ -108,6 +108,7 @@ defmodule Emerge.UI do
   - `rotate/1` for layout-aware element rotation
   - `focus_on_mount/0` to focus an element on first mount
   - `clip_nearby/0` to clip nearby escapes under the host
+  - `pass_pointer/0` to let pointer input pass through a front nearby overlay
   - `image_fit/1` for `image/2` and `video/2`
 
   ```elixir
@@ -178,6 +179,7 @@ defmodule Emerge.UI do
   @type layout_rotate_attr :: {:layout_rotate, number()}
   @type focus_on_mount_attr :: {:focus_on_mount, true}
   @type clip_nearby_attr :: {:clip_nearby, true}
+  @type pass_pointer_attr :: {:pass_pointer, true}
   @type image_fit_attr :: {:image_fit, image_fit_mode()}
 
   @doc """
@@ -549,6 +551,22 @@ defmodule Emerge.UI do
   """
   @spec clip_nearby() :: clip_nearby_attr()
   def clip_nearby, do: {:clip_nearby, true}
+
+  @doc """
+  Let pointer input pass through a front nearby overlay.
+
+  Set it on the root element of `Nearby.in_front/1`, `Nearby.above/1`,
+  `Nearby.below/1`, `Nearby.on_left/1` or `Nearby.on_right/1`. Presses, moves,
+  drags and scrolls inside the overlay then reach the elements behind it. Event
+  handlers on the overlay root and its children still apply.
+
+  ```elixir
+  el([Nearby.in_front(el([pass_pointer(), Background.color(color_rgba(0, 0, 0, 0.2))], none()))],
+     content)
+  ```
+  """
+  @spec pass_pointer() :: pass_pointer_attr()
+  def pass_pointer, do: {:pass_pointer, true}
 
   @doc """
   Set image fit mode for `image/2` and `video/2`.

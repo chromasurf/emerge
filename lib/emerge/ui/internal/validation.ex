@@ -13,6 +13,7 @@ defmodule Emerge.UI.Internal.Validation do
                       :key,
                       :focus_on_mount,
                       :clip_nearby,
+                      :pass_pointer,
                       :width,
                       :height,
                       :layout_scale,
@@ -415,7 +416,8 @@ defmodule Emerge.UI.Internal.Validation do
               :snap_layout,
               :snap_text_metrics,
               :focus_on_mount,
-              :clip_nearby
+              :clip_nearby,
+              :pass_pointer
             ] and
               is_boolean(value),
        do: :ok
@@ -428,7 +430,8 @@ defmodule Emerge.UI.Internal.Validation do
               :snap_layout,
               :snap_text_metrics,
               :focus_on_mount,
-              :clip_nearby
+              :clip_nearby,
+              :pass_pointer
             ] do
     raise ArgumentError,
           "#{attrs_owner} expects #{inspect(key)} to be a boolean, got: #{inspect(value)}"

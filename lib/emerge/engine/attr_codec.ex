@@ -88,7 +88,8 @@ defmodule Emerge.Engine.AttrCodec do
     scroll_position_x: 85,
     scroll_position_y: 86,
     on_scroll: 87,
-    on_drag: 88
+    on_drag: 88,
+    pass_pointer: 89
   }
 
   @tag_type Map.new(@type_tag, fn {type, tag} -> {tag, type} end)
@@ -216,6 +217,7 @@ defmodule Emerge.Engine.AttrCodec do
   defp encode_value(:virtual_key, value), do: encode_virtual_key(value)
   defp encode_value(:focus_on_mount, _value), do: encode_bool(true)
   defp encode_value(:clip_nearby, _value), do: encode_bool(true)
+  defp encode_value(:pass_pointer, _value), do: encode_bool(true)
   defp encode_value(:on_change, _value), do: encode_bool(true)
   defp encode_value(:on_focus, _value), do: encode_bool(true)
   defp encode_value(:on_blur, _value), do: encode_bool(true)
@@ -303,6 +305,7 @@ defmodule Emerge.Engine.AttrCodec do
   defp decode_value(:virtual_key, rest), do: decode_virtual_key(rest)
   defp decode_value(:focus_on_mount, rest), do: decode_bool(rest)
   defp decode_value(:clip_nearby, rest), do: decode_bool(rest)
+  defp decode_value(:pass_pointer, rest), do: decode_bool(rest)
   defp decode_value(:on_change, rest), do: decode_bool(rest)
   defp decode_value(:on_focus, rest), do: decode_bool(rest)
   defp decode_value(:on_blur, rest), do: decode_bool(rest)

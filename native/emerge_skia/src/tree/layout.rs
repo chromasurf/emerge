@@ -1504,6 +1504,7 @@ pub(crate) fn scale_attrs(attrs: &Attrs, scale: f32) -> Attrs {
         on_mouse_leave: attrs.on_mouse_leave,
         on_mouse_move: attrs.on_mouse_move,
         on_drag: attrs.on_drag,
+        pass_pointer: attrs.pass_pointer,
         on_press: attrs.on_press,
         on_swipe_up: attrs.on_swipe_up,
         on_swipe_down: attrs.on_swipe_down,

@@ -6495,7 +6495,9 @@ fn emit_element_listeners_with_focus_meta(
         emit_key_binding_listeners_for_element(element, out);
     }
     out.emit_opt(slot_middle_paste_primary_press(element, state, focus_meta));
-    if state.is_some_and(|state| state.front_nearby_root) {
+    if state.is_some_and(|state| state.front_nearby_root)
+        && !element.layout.effective.pass_pointer.unwrap_or(false)
+    {
         emit_front_nearby_blockers_for_element(element, state, out);
     }
 }
@@ -11324,6 +11326,51 @@ mod tests {
         );
         assert!(matches!(
             uncovered_actions.as_slice(),
+            [ListenerAction::ElixirEvent(ElixirEvent { element_id, kind, .. })]
+                if *element_id == NodeId::from_term_bytes(vec![81])
+                    && *kind == ElementEventKind::MouseDown
+        ));
+    }
+
+    #[test]
+    fn registry_for_elements_pass_pointer_front_nearby_lets_input_through() {
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 150.0,
+            height: 40.0,
+        };
+        let mut host = with_interaction_rect(make_element(80, Attrs::default()), true, rect);
+        host.children = vec![NodeId::from_term_bytes(vec![81])];
+        host.nearby
+            .set(NearbySlot::InFront, Some(NodeId::from_term_bytes(vec![82])));
+        let underlying = with_interaction_rect(make_element(81, on_mouse_down_attrs()), true, rect);
+        let overlay = with_interaction_rect(
+            make_element(
+                82,
+                Attrs {
+                    pass_pointer: Some(true),
+                    ..Attrs::default()
+                },
+            ),
+            true,
+            rect,
+        );
+
+        let registry = registry_for_elements(&[host, underlying, overlay]);
+
+        let actions = first_matching_actions(
+            &registry,
+            &InputEvent::CursorButton {
+                button: "left".to_string(),
+                action: ACTION_PRESS,
+                mods: 0,
+                x: 50.0,
+                y: 10.0,
+            },
+        );
+        assert!(matches!(
+            actions.as_slice(),
             [ListenerAction::ElixirEvent(ElixirEvent { element_id, kind, .. })]
                 if *element_id == NodeId::from_term_bytes(vec![81])
                     && *kind == ElementEventKind::MouseDown
