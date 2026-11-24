@@ -3383,6 +3383,72 @@ struct EglDmabufSupport {
     acquire_timeouts: Cell<u64>,
     acquire_errors: Cell<u64>,
     supports_modifiers: bool,
+    // Least recently used first.
+    imports: RefCell<Vec<(DmabufKey, Rc<DmabufImport>)>>,
+}
+
+#[cfg(any(
+    all(all(feature = "wayland", feature = "opengl"), target_os = "linux"),
+    all(all(feature = "drm", feature = "opengl"), target_os = "linux")
+))]
+const MAX_CACHED_DMABUF_IMPORTS: usize = 6;
+
+#[cfg(any(
+    all(all(feature = "wayland", feature = "opengl"), target_os = "linux"),
+    all(all(feature = "drm", feature = "opengl"), target_os = "linux")
+))]
+struct DmabufImport {
+    egl_image: egl::types::EGLImageKHR,
+    texture_id: u32,
+}
+
+/// A DMA-BUF is the same buffer while its inode is; the fds of each frame are new.
+#[cfg(any(
+    all(all(feature = "wayland", feature = "opengl"), target_os = "linux"),
+    all(all(feature = "drm", feature = "opengl"), target_os = "linux")
+))]
+#[derive(PartialEq, Eq)]
+struct DmabufKey {
+    width: u32,
+    height: u32,
+    format: u32,
+    planes: Vec<(u64, u64, u64, u32, Option<u64>)>,
+}
+
+#[cfg(any(
+    all(all(feature = "wayland", feature = "opengl"), target_os = "linux"),
+    all(all(feature = "drm", feature = "opengl"), target_os = "linux")
+))]
+impl DmabufKey {
+    fn of(frame: &PrimeFrame) -> Result<Self, String> {
+        let planes = (0..frame.planes.len())
+            .map(|index| {
+                let plane = frame.plane(index)?;
+                let object = frame.object(plane.obj_idx as usize)?;
+                let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+                if unsafe { libc::fstat(object.fd.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+                    return Err(format!(
+                        "fstat of DMA-BUF plane {index} failed: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
+                let stat = unsafe { stat.assume_init() };
+                Ok((
+                    stat.st_dev as u64,
+                    stat.st_ino as u64,
+                    plane.offset,
+                    plane.pitch,
+                    object.modifier,
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(Self {
+            width: frame.width,
+            height: frame.height,
+            format: frame.format,
+            planes,
+        })
+    }
 }
 
 #[cfg(any(
@@ -3476,7 +3542,70 @@ impl EglDmabufSupport {
             acquire_timeouts: Cell::new(0),
             acquire_errors: Cell::new(0),
             supports_modifiers,
+            imports: RefCell::new(Vec::new()),
         })
+    }
+
+    /// The GL import of the frame's buffers, created once per DMA-BUF and reused while the
+    /// producer cycles through the same buffers.
+    fn import(&self, target_id: &str, frame: &PrimeFrame) -> Result<Rc<DmabufImport>, String> {
+        let key = DmabufKey::of(frame)?;
+        let mut imports = self.imports.borrow_mut();
+        if let Some(index) = imports.iter().position(|(cached, _)| *cached == key) {
+            let entry = imports.remove(index);
+            let import = Rc::clone(&entry.1);
+            imports.push(entry);
+            return Ok(import);
+        }
+
+        let egl_image = self.create_image(target_id, frame)?;
+        let mut texture_id = 0;
+        unsafe {
+            gl::GenTextures(1, &mut texture_id);
+            gl::BindTexture(GL_TEXTURE_EXTERNAL_OES, texture_id);
+            for (parameter, value) in [
+                (gl::TEXTURE_MIN_FILTER, gl::LINEAR),
+                (gl::TEXTURE_MAG_FILTER, gl::LINEAR),
+                (gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE),
+                (gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE),
+            ] {
+                gl::TexParameteri(GL_TEXTURE_EXTERNAL_OES, parameter, value as i32);
+            }
+            (self.image_target_texture_2d_oes)(GL_TEXTURE_EXTERNAL_OES, egl_image);
+            gl::BindTexture(GL_TEXTURE_EXTERNAL_OES, 0);
+        }
+        let import = DmabufImport {
+            egl_image,
+            texture_id,
+        };
+        if let Err(err) = gl_step_check(&format!(
+            "binding imported external texture for target={target_id}"
+        )) {
+            self.destroy_import(&import);
+            return Err(err);
+        }
+
+        let import = Rc::new(import);
+        imports.push((key, Rc::clone(&import)));
+        // Only imports no frame holds any more can go.
+        while imports.len() > MAX_CACHED_DMABUF_IMPORTS {
+            let Some(index) = imports
+                .iter()
+                .position(|(_, cached)| Rc::strong_count(cached) == 1)
+            else {
+                break;
+            };
+            let (_, evicted) = imports.remove(index);
+            self.destroy_import(&evicted);
+        }
+        Ok(import)
+    }
+
+    fn destroy_import(&self, import: &DmabufImport) {
+        unsafe {
+            gl::DeleteTextures(1, &import.texture_id);
+        }
+        self.destroy_image(import.egl_image);
     }
 
     fn prepare_acquire(
@@ -3768,6 +3897,9 @@ fn validate_modifier_support(
 ))]
 impl Drop for EglDmabufSupport {
     fn drop(&mut self) {
+        for (_, import) in std::mem::take(self.imports.get_mut()) {
+            self.destroy_import(&import);
+        }
         let pending = self.deferred_sync_destroy.get_mut();
         let unresolved = self
             .native_fence
@@ -5406,8 +5538,8 @@ fn import_vulkan_frame(
     all(all(feature = "drm", feature = "opengl"), target_os = "linux")
 ))]
 struct ImportedExternalFrame {
-    support: Rc<EglDmabufSupport>,
-    egl_image: egl::types::EGLImageKHR,
+    _support: Rc<EglDmabufSupport>,
+    _import: Rc<DmabufImport>,
     texture_id: u32,
     _frame: PrimeFrame,
 }
@@ -5422,50 +5554,12 @@ impl ImportedExternalFrame {
         frame: PrimeFrame,
         support: &Rc<EglDmabufSupport>,
     ) -> Result<Self, String> {
-        let egl_image = support.create_image(target_id, &frame)?;
-        let mut texture_id = 0;
-        unsafe {
-            gl::GenTextures(1, &mut texture_id);
-            gl::BindTexture(GL_TEXTURE_EXTERNAL_OES, texture_id);
-            gl::TexParameteri(
-                GL_TEXTURE_EXTERNAL_OES,
-                gl::TEXTURE_MIN_FILTER,
-                gl::LINEAR as i32,
-            );
-            gl::TexParameteri(
-                GL_TEXTURE_EXTERNAL_OES,
-                gl::TEXTURE_MAG_FILTER,
-                gl::LINEAR as i32,
-            );
-            gl::TexParameteri(
-                GL_TEXTURE_EXTERNAL_OES,
-                gl::TEXTURE_WRAP_S,
-                gl::CLAMP_TO_EDGE as i32,
-            );
-            gl::TexParameteri(
-                GL_TEXTURE_EXTERNAL_OES,
-                gl::TEXTURE_WRAP_T,
-                gl::CLAMP_TO_EDGE as i32,
-            );
-            (support.image_target_texture_2d_oes)(GL_TEXTURE_EXTERNAL_OES, egl_image);
-            gl::BindTexture(GL_TEXTURE_EXTERNAL_OES, 0);
-        }
-
-        if let Err(err) = gl_step_check(&format!(
-            "binding imported external texture for target={target_id}"
-        )) {
-            unsafe {
-                gl::DeleteTextures(1, &texture_id);
-            }
-            support.destroy_image(egl_image);
-            return Err(err);
-        }
-
+        let import = support.import(target_id, &frame)?;
         frame.record_imported();
         Ok(Self {
-            support: Rc::clone(support),
-            egl_image,
-            texture_id,
+            _support: Rc::clone(support),
+            texture_id: import.texture_id,
+            _import: import,
             _frame: frame,
         })
     }
@@ -5478,19 +5572,6 @@ impl ImportedExternalFrame {
 impl ImportedExternalFrame {
     fn stats(&self) -> Option<Arc<RendererStatsCollector>> {
         self._frame.stats()
-    }
-}
-
-#[cfg(any(
-    all(all(feature = "wayland", feature = "opengl"), target_os = "linux"),
-    all(all(feature = "drm", feature = "opengl"), target_os = "linux")
-))]
-impl Drop for ImportedExternalFrame {
-    fn drop(&mut self) {
-        unsafe {
-            gl::DeleteTextures(1, &self.texture_id);
-        }
-        self.support.destroy_image(self.egl_image);
     }
 }
 
