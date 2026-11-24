@@ -212,6 +212,10 @@ defmodule Emerge.UITest do
     assert clip_nearby() == {:clip_nearby, true}
   end
 
+  test "pass_pointer helper returns attr" do
+    assert pass_pointer() == {:pass_pointer, true}
+  end
+
   test "nearby mounts preserve attr-list definition order" do
     element =
       el(

@@ -41,6 +41,7 @@ defmodule Emerge.Engine.AttrCodecTest do
       snap_layout: true,
       snap_text_metrics: true,
       clip_nearby: true,
+      pass_pointer: true,
       move_x: 12.5,
       move_y: -8.0,
       rotate: 45.0,
