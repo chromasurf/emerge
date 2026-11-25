@@ -13,7 +13,8 @@ defmodule Emerge.UI.Animation do
 
   - at least 2 non-empty keyframes
   - a positive duration in milliseconds
-  - a curve: `:linear`, `:ease_in`, `:ease_out`, or `:ease_in_out`
+  - a curve: `:linear`, `:ease_in`, `:ease_out`, `:ease_in_out`, or `:spring` (settles
+    within the duration and overshoots by about 3 %)
   - an optional repeat: `:once`, `:loop`, or a positive integer
 
   A positive integer runs that many times and then clamps to the last keyframe.
@@ -149,7 +150,7 @@ defmodule Emerge.UI.Animation do
   delay; external updates and explicit retries are not throttled.
   """
 
-  @type curve :: :linear | :ease_in | :ease_out | :ease_in_out
+  @type curve :: :linear | :ease_in | :ease_out | :ease_in_out | :spring
   @type repeat :: :once | :loop | pos_integer()
   @type keyframe :: Emerge.UI.attrs() | %{optional(atom()) => term()}
   @type keyframes :: [keyframe()]

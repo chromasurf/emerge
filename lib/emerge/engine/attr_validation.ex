@@ -511,12 +511,12 @@ defmodule Emerge.Engine.AttrValidation do
   end
 
   defp validate_animation_curve!(_owner_name, curve)
-       when curve in [:linear, :ease_in, :ease_out, :ease_in_out],
+       when curve in [:linear, :ease_in, :ease_out, :ease_in_out, :spring],
        do: :ok
 
   defp validate_animation_curve!(owner_name, curve) do
     raise ArgumentError,
-          "#{owner_name} expects :curve to be :linear, :ease_in, :ease_out, or :ease_in_out, got: #{inspect(curve)}"
+          "#{owner_name} expects :curve to be :linear, :ease_in, :ease_out, :ease_in_out, or :spring, got: #{inspect(curve)}"
   end
 
   defp validate_animation_repeat!("animate_exit", :once), do: :ok

@@ -107,7 +107,22 @@ pub(super) fn apply_curve(curve: &AnimationCurve, t: f64) -> f64 {
         AnimationCurve::EaseOut => 1.0 - (1.0 - t).powi(3),
         AnimationCurve::EaseInOut if t < 0.5 => 4.0 * t * t * t,
         AnimationCurve::EaseInOut => 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0,
+        AnimationCurve::Spring => spring(t),
     }
+}
+
+// An underdamped spring (damping ratio 0.75) that settles within the duration and overshoots its
+// target by about 3 %, close to the default spring of UIKit and SwiftUI.
+const SPRING_DAMPING: f64 = 0.75;
+const SPRING_OMEGA: f64 = 8.0;
+
+fn spring(t: f64) -> f64 {
+    if t >= 1.0 {
+        return 1.0;
+    }
+    let decay = SPRING_DAMPING * SPRING_OMEGA;
+    let damped = SPRING_OMEGA * (1.0 - SPRING_DAMPING * SPRING_DAMPING).sqrt();
+    1.0 - (-decay * t).exp() * ((damped * t).cos() + decay / damped * (damped * t).sin())
 }
 
 /// Continue the original curve interval after an environmental retarget. The
@@ -122,6 +137,11 @@ pub(crate) fn remaining_progress(curve: &AnimationCurve, anchor: f64, now: f64) 
         return 0.0;
     }
     let linear = (t - a) / (1.0 - a);
+    // The spring keeps its overshoot, so it skips the clamp below.
+    if let AnimationCurve::Spring = curve {
+        let from = spring(a);
+        return (spring(t) - from) / (1.0 - from);
+    }
     match curve {
         AnimationCurve::Linear => linear,
         AnimationCurve::EaseIn => linear * (t * t + t * a + a * a) / (1.0 + a + a * a),
@@ -133,6 +153,7 @@ pub(crate) fn remaining_progress(curve: &AnimationCurve, anchor: f64, now: f64) 
         AnimationCurve::EaseInOut => {
             4.0 * (t - a) * (t * t + t * a + a * a) / (1.0 - 4.0 * a.powi(3))
         }
+        AnimationCurve::Spring => unreachable!("handled above"),
     }
     .clamp(0.0, 1.0)
 }

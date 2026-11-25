@@ -787,6 +787,7 @@ fn decode_change_policies(
                 "ease_in" => AnimationCurve::EaseIn,
                 "ease_out" => AnimationCurve::EaseOut,
                 "ease_in_out" => AnimationCurve::EaseInOut,
+                "spring" => AnimationCurve::Spring,
                 _ => {
                     return Err(DecodeError::InvalidStructure(
                         "invalid animate_change curve".into(),
@@ -877,6 +878,7 @@ fn decode_animation_spec(cursor: &mut AttrCursor) -> Result<AnimationSpec, Decod
         "ease_in" => AnimationCurve::EaseIn,
         "ease_out" => AnimationCurve::EaseOut,
         "ease_in_out" => AnimationCurve::EaseInOut,
+        "spring" => AnimationCurve::Spring,
         other => {
             return Err(DecodeError::InvalidStructure(format!(
                 "unknown animation curve: {}",
