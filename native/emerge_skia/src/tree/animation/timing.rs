@@ -107,7 +107,22 @@ pub(super) fn apply_curve(curve: &AnimationCurve, t: f64) -> f64 {
         AnimationCurve::EaseOut => 1.0 - (1.0 - t).powi(3),
         AnimationCurve::EaseInOut if t < 0.5 => 4.0 * t * t * t,
         AnimationCurve::EaseInOut => 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0,
+        AnimationCurve::Spring => spring(t),
     }
+}
+
+// An underdamped spring (damping ratio 0.75) that settles within the duration and overshoots its
+// target by about 3 %, close to the default spring of UIKit and SwiftUI.
+const SPRING_DAMPING: f64 = 0.75;
+const SPRING_OMEGA: f64 = 8.0;
+
+fn spring(t: f64) -> f64 {
+    if t >= 1.0 {
+        return 1.0;
+    }
+    let decay = SPRING_DAMPING * SPRING_OMEGA;
+    let damped = SPRING_OMEGA * (1.0 - SPRING_DAMPING * SPRING_DAMPING).sqrt();
+    1.0 - (-decay * t).exp() * ((damped * t).cos() + decay / damped * (damped * t).sin())
 }
 
 /// Continue the original curve interval after an environmental retarget. The
@@ -132,6 +147,16 @@ pub(crate) fn remaining_progress(curve: &AnimationCurve, anchor: f64, now: f64) 
         }
         AnimationCurve::EaseInOut => {
             4.0 * (t - a) * (t * t + t * a + a * a) / (1.0 - 4.0 * a.powi(3))
+        }
+        // The spring keeps its overshoot, so it returns before the clamp. From about 45 % on it is
+        // at or past its target and starts again over the rest of the interval.
+        AnimationCurve::Spring => {
+            let from = spring(a);
+            return if from < 0.95 {
+                (spring(t) - from) / (1.0 - from)
+            } else {
+                spring(linear)
+            };
         }
     }
     .clamp(0.0, 1.0)
@@ -195,5 +220,20 @@ mod tests {
         let a = 1.0 - 1e-8;
         let t = a + (1.0 - a) / 2.0;
         assert!((remaining_progress(&AnimationCurve::EaseOut, a, t) - 0.875).abs() < 1e-7);
+    }
+
+    #[test]
+    fn spring_retarget_runs_from_zero_to_one_also_past_its_overshoot() {
+        for a in [0.0, 0.2, 0.45, 0.6, 0.9] {
+            assert_eq!(remaining_progress(&AnimationCurve::Spring, a, a), 0.0);
+            assert_eq!(remaining_progress(&AnimationCurve::Spring, a, 1.0), 1.0);
+            for fraction in [0.1, 0.5, 0.9] {
+                let p = remaining_progress(&AnimationCurve::Spring, a, a + (1.0 - a) * fraction);
+                assert!(
+                    p.is_finite() && p > 0.0 && p < 1.2,
+                    "a={a} fraction={fraction}: {p}"
+                );
+            }
+        }
     }
 }
