@@ -216,6 +216,36 @@ defmodule Emerge.UITest do
     assert pass_pointer() == {:pass_pointer, true}
   end
 
+  test "color_matrix presets" do
+    {:color_matrix, gray} = Transform.color_matrix(:grayscale)
+    assert length(gray) == 20
+    assert Enum.slice(gray, 0, 3) == Enum.slice(gray, 5, 3)
+    assert Enum.slice(gray, 15, 5) == [0, 0, 0, 1, 0]
+
+    {:color_matrix, unchanged} = Transform.color_matrix({:grayscale, 0.0})
+
+    assert Enum.map(unchanged, &(&1 * 1.0)) ==
+             Enum.map([1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0], &(&1 * 1.0))
+
+    {:color_matrix, red} = Transform.color_matrix({:tint, color_rgb(255, 0, 0)})
+    assert Enum.slice(red, 5, 5) == [0.0, 0.0, 0.0, 0, 0]
+
+    assert_raise ArgumentError, fn -> el([{:color_matrix, [1, 2]}], text("x")) end
+
+    assert_raise ArgumentError, fn ->
+      el([{:color_matrix, [1.0e39 | List.duplicate(0, 19)]}], text("x"))
+    end
+
+    assert_raise ArgumentError, fn ->
+      el([{:color_matrix, List.duplicate(0, 19) ++ [0.5]}], text("x"))
+    end
+
+    assert_raise ArgumentError, fn -> Transform.color_matrix({:grayscale, 2.0}) end
+
+    assert Transform.color_matrix({:tint, color(:sky, 500, 0.3)}) ==
+             Transform.color_matrix({:tint, color(:sky, 500)})
+  end
+
   test "nearby mounts preserve attr-list definition order" do
     element =
       el(

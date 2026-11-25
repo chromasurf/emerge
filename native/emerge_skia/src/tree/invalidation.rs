@@ -138,6 +138,7 @@ pub fn classify_attrs_change(before: &Attrs, after: &Attrs) -> TreeInvalidation 
         || before.rotate != after.rotate
         || before.scale != after.scale
         || before.alpha != after.alpha
+        || before.color_matrix != after.color_matrix
     {
         invalidation.add(TreeInvalidation::Paint);
     }

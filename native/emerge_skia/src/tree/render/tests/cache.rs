@@ -945,7 +945,10 @@ fn visit_scene_nodes(
         | RenderNode::Clip { children, .. }
         | RenderNode::RelaxedClip { children, .. }
         | RenderNode::Transform { children, .. }
-        | RenderNode::Alpha { children, .. } => visit_scene_nodes(children, parent, descriptors),
+        | RenderNode::Alpha { children, .. }
+        | RenderNode::ColorFilter { children, .. } => {
+            visit_scene_nodes(children, parent, descriptors)
+        }
         RenderNode::PaintLayer(layer) => visit_layer(layer, parent, descriptors),
         RenderNode::Primitive(_) => {}
     });
@@ -990,7 +993,8 @@ fn visit_layer_content(
         | RenderPaintLayerContentNode::Clip { children, .. }
         | RenderPaintLayerContentNode::RelaxedClip { children, .. }
         | RenderPaintLayerContentNode::Transform { children, .. }
-        | RenderPaintLayerContentNode::Alpha { children, .. } => {
+        | RenderPaintLayerContentNode::Alpha { children, .. }
+        | RenderPaintLayerContentNode::ColorFilter { children, .. } => {
             visit_layer_content(children, parent, descriptors)
         }
     });
@@ -1011,7 +1015,8 @@ fn describe_layers(nodes: &[RenderNode]) -> Vec<&RenderPaintLayer> {
             | RenderNode::Clip { children, .. }
             | RenderNode::RelaxedClip { children, .. }
             | RenderNode::Transform { children, .. }
-            | RenderNode::Alpha { children, .. } => describe_layers(children),
+            | RenderNode::Alpha { children, .. }
+            | RenderNode::ColorFilter { children, .. } => describe_layers(children),
             RenderNode::PaintLayer(layer) => {
                 let mut layers = vec![layer];
                 layers.extend(layer.descendant_layers());
@@ -1037,7 +1042,8 @@ fn transform_for_layer_reason(
             RenderNode::ShadowPass { children }
             | RenderNode::Clip { children, .. }
             | RenderNode::RelaxedClip { children, .. }
-            | RenderNode::Alpha { children, .. } => first_transform(children, transform),
+            | RenderNode::Alpha { children, .. }
+            | RenderNode::ColorFilter { children, .. } => first_transform(children, transform),
             RenderNode::PaintLayer(layer) => first_transform(&layer.content_nodes(), transform),
             RenderNode::Primitive(_) => None,
         })
@@ -1056,7 +1062,8 @@ fn transform_for_layer_reason(
             RenderNode::ShadowPass { children }
             | RenderNode::Clip { children, .. }
             | RenderNode::RelaxedClip { children, .. }
-            | RenderNode::Alpha { children, .. } => visit(children, reason, transform),
+            | RenderNode::Alpha { children, .. }
+            | RenderNode::ColorFilter { children, .. } => visit(children, reason, transform),
             RenderNode::PaintLayer(layer) if layer.id.role == reason => {
                 first_transform(&layer.content_nodes(), transform).or(Some(transform))
             }
@@ -1094,7 +1101,8 @@ fn visit_primitives(nodes: &[RenderNode], visitor: &mut impl FnMut(&DrawPrimitiv
         | RenderNode::Clip { children, .. }
         | RenderNode::RelaxedClip { children, .. }
         | RenderNode::Transform { children, .. }
-        | RenderNode::Alpha { children, .. } => visit_primitives(children, visitor),
+        | RenderNode::Alpha { children, .. }
+        | RenderNode::ColorFilter { children, .. } => visit_primitives(children, visitor),
         RenderNode::PaintLayer(_) => {}
         RenderNode::Primitive(primitive) => visitor(primitive),
     });

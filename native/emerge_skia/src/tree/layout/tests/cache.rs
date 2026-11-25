@@ -3938,7 +3938,8 @@ fn first_moving_paint_layer(
         | crate::render_scene::RenderNode::Clip { children, .. }
         | crate::render_scene::RenderNode::RelaxedClip { children, .. }
         | crate::render_scene::RenderNode::Transform { children, .. }
-        | crate::render_scene::RenderNode::Alpha { children, .. } => {
+        | crate::render_scene::RenderNode::Alpha { children, .. }
+        | crate::render_scene::RenderNode::ColorFilter { children, .. } => {
             first_moving_paint_layer(children)
         }
         crate::render_scene::RenderNode::PaintLayer(layer)
@@ -3959,7 +3960,8 @@ fn render_nodes_have_moving_paint_layers(nodes: &[crate::render_scene::RenderNod
         | crate::render_scene::RenderNode::Clip { children, .. }
         | crate::render_scene::RenderNode::RelaxedClip { children, .. }
         | crate::render_scene::RenderNode::Transform { children, .. }
-        | crate::render_scene::RenderNode::Alpha { children, .. } => {
+        | crate::render_scene::RenderNode::Alpha { children, .. }
+        | crate::render_scene::RenderNode::ColorFilter { children, .. } => {
             render_nodes_have_moving_paint_layers(children)
         }
         crate::render_scene::RenderNode::PaintLayer(layer)
@@ -3987,7 +3989,8 @@ fn moving_paint_layer_with_placement_for_stable_id(
             crate::render_scene::RenderNode::ShadowPass { children }
             | crate::render_scene::RenderNode::Clip { children, .. }
             | crate::render_scene::RenderNode::RelaxedClip { children, .. }
-            | crate::render_scene::RenderNode::Alpha { children, .. } => {
+            | crate::render_scene::RenderNode::Alpha { children, .. }
+            | crate::render_scene::RenderNode::ColorFilter { children, .. } => {
                 visit(children, stable_id, placement)
             }
             crate::render_scene::RenderNode::Transform {
@@ -4255,6 +4258,13 @@ fn node_without_moving_paint_layers(
                 had_layer,
             )
         }
+        crate::render_scene::RenderNode::ColorFilter { matrix, children } => {
+            let (children, had_layer) = nodes_without_moving_paint_layers_with_flag(children);
+            (
+                vec![crate::render_scene::RenderNode::ColorFilter { matrix, children }],
+                had_layer,
+            )
+        }
         crate::render_scene::RenderNode::PaintLayer(layer)
             if layer.id.role == crate::render_scene::PaintLayerReason::Root =>
         {
@@ -4330,6 +4340,12 @@ fn translate_render_node(
         crate::render_scene::RenderNode::Alpha { alpha, children } => {
             crate::render_scene::RenderNode::Alpha {
                 alpha,
+                children: translate_render_nodes(children, dx, dy),
+            }
+        }
+        crate::render_scene::RenderNode::ColorFilter { matrix, children } => {
+            crate::render_scene::RenderNode::ColorFilter {
+                matrix,
                 children: translate_render_nodes(children, dx, dy),
             }
         }

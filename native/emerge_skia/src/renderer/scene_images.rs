@@ -256,7 +256,8 @@ fn image_ids<'a>(
                         | RenderNode::Clip { children, .. }
                         | RenderNode::RelaxedClip { children, .. }
                         | RenderNode::Transform { children, .. }
-                        | RenderNode::Alpha { children, .. } => {
+                        | RenderNode::Alpha { children, .. }
+                        | RenderNode::ColorFilter { children, .. } => {
                             pending.push(Branch::Nodes(children))
                         }
                     }
@@ -280,7 +281,8 @@ fn image_ids<'a>(
                         | RenderPaintLayerContentNode::Clip { children, .. }
                         | RenderPaintLayerContentNode::RelaxedClip { children, .. }
                         | RenderPaintLayerContentNode::Transform { children, .. }
-                        | RenderPaintLayerContentNode::Alpha { children, .. } => {
+                        | RenderPaintLayerContentNode::Alpha { children, .. }
+                        | RenderPaintLayerContentNode::ColorFilter { children, .. } => {
                             pending.push(Branch::Content(children))
                         }
                     }

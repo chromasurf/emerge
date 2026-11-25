@@ -267,7 +267,7 @@ fn trace_nodes(
 ) {
     for node in nodes {
         match node {
-            RenderNode::ShadowPass { children } => {
+            RenderNode::ShadowPass { children } | RenderNode::ColorFilter { children, .. } => {
                 trace_nodes(children, context, state, scopes, draws);
             }
             RenderNode::Clip { clips, children } | RenderNode::RelaxedClip { clips, children } => {

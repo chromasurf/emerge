@@ -326,6 +326,8 @@ pub struct Attrs {
     pub on_drag: Option<bool>,
     /// A front nearby root with this attr does not block pointer input behind it.
     pub pass_pointer: Option<bool>,
+    /// 4x5 row-major color matrix the element and its children are drawn through.
+    pub color_matrix: Option<[f32; 20]>,
     pub on_press: Option<bool>,
     pub on_swipe_up: Option<bool>,
     pub on_swipe_down: Option<bool>,
@@ -503,6 +505,7 @@ const TAG_SCROLL_POSITION_Y: u8 = 86;
 const TAG_ON_SCROLL: u8 = 87;
 const TAG_ON_DRAG: u8 = 88;
 const TAG_PASS_POINTER: u8 = 89;
+const TAG_COLOR_MATRIX: u8 = 90;
 const TAG_ANIMATE_CHANGE: u8 = 84;
 
 // =============================================================================
@@ -614,6 +617,7 @@ fn decode_attr(cursor: &mut AttrCursor, tag: u8, attrs: &mut Attrs) -> Result<()
         TAG_SCROLL_POSITION_Y => attrs.scroll_position_y = Some(decode_scroll_position(cursor)?),
         TAG_ON_DRAG => attrs.on_drag = Some(cursor.read_bool()?),
         TAG_PASS_POINTER => attrs.pass_pointer = Some(cursor.read_bool()?),
+        TAG_COLOR_MATRIX => attrs.color_matrix = Some(decode_color_matrix(cursor)?),
         TAG_ON_SCROLL => attrs.on_scroll = Some(cursor.read_bool()?),
         TAG_PADDING => attrs.padding = Some(decode_padding(cursor)?),
         TAG_SPACING => attrs.spacing = Some(cursor.read_f64()?),
@@ -1074,6 +1078,21 @@ fn decode_length(cursor: &mut AttrCursor) -> Result<Length, DecodeError> {
             variant
         ))),
     }
+}
+
+/// 20 finite f32 values; Skia builds no color filter from others.
+fn decode_color_matrix(cursor: &mut AttrCursor) -> Result<[f32; 20], DecodeError> {
+    let values = (0..20)
+        .map(|_| cursor.read_f64().map(|value| value as f32))
+        .collect::<Result<Vec<f32>, _>>()?;
+
+    if !values.iter().all(|value| value.is_finite()) {
+        return Err(DecodeError::InvalidStructure(
+            "color_matrix values must be finite".to_string(),
+        ));
+    }
+
+    Ok(values.try_into().expect("20 values"))
 }
 
 fn decode_padding(cursor: &mut AttrCursor) -> Result<Padding, DecodeError> {
