@@ -3218,7 +3218,8 @@ fn first_paint_layer_with_reason(
         | crate::render_scene::RenderNode::Clip { children, .. }
         | crate::render_scene::RenderNode::RelaxedClip { children, .. }
         | crate::render_scene::RenderNode::Transform { children, .. }
-        | crate::render_scene::RenderNode::Alpha { children, .. } => {
+        | crate::render_scene::RenderNode::Alpha { children, .. }
+        | crate::render_scene::RenderNode::ColorFilter { children, .. } => {
             first_paint_layer_with_reason(children, reason)
         }
         crate::render_scene::RenderNode::PaintLayer(layer) if layer.id.role == reason => {
@@ -3238,7 +3239,8 @@ fn render_node_contains_image_placeholder(node: &crate::render_scene::RenderNode
         | crate::render_scene::RenderNode::Clip { children, .. }
         | crate::render_scene::RenderNode::RelaxedClip { children, .. }
         | crate::render_scene::RenderNode::Transform { children, .. }
-        | crate::render_scene::RenderNode::Alpha { children, .. } => {
+        | crate::render_scene::RenderNode::Alpha { children, .. }
+        | crate::render_scene::RenderNode::ColorFilter { children, .. } => {
             children.iter().any(render_node_contains_image_placeholder)
         }
         crate::render_scene::RenderNode::PaintLayer(layer) => layer
@@ -3259,7 +3261,8 @@ fn render_nodes_contain_image_asset(
         | crate::render_scene::RenderNode::Clip { children, .. }
         | crate::render_scene::RenderNode::RelaxedClip { children, .. }
         | crate::render_scene::RenderNode::Transform { children, .. }
-        | crate::render_scene::RenderNode::Alpha { children, .. } => {
+        | crate::render_scene::RenderNode::Alpha { children, .. }
+        | crate::render_scene::RenderNode::ColorFilter { children, .. } => {
             render_nodes_contain_image_asset(children, image_id)
         }
         crate::render_scene::RenderNode::PaintLayer(layer) => {

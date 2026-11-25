@@ -45,6 +45,7 @@ defmodule Emerge.UI.Internal.Validation do
                       :rotate,
                       :scale,
                       :alpha,
+                      :color_matrix,
                       :animate_change,
                       :animate,
                       :animate_enter,
@@ -489,6 +490,19 @@ defmodule Emerge.UI.Internal.Validation do
               :font_word_spacing
             ],
        do: AttrValidation.normalize_decorative_value!(attrs_owner, key, value)
+
+  # Skia takes finite f32 values. An offset in the alpha row would make the transparent rest of
+  # the layer opaque, outside the element's bounds.
+  defp validate_public_attr_value!(attrs_owner, :color_matrix, value) do
+    unless is_list(value) and length(value) == 20 and
+             Enum.all?(value, &(is_number(&1) and abs(&1) <= 3.0e38)) and Enum.at(value, 19) == 0 do
+      raise ArgumentError,
+            "#{attrs_owner} expects :color_matrix to be a list of 20 finite numbers with 0 as the " <>
+              "last one, got: #{inspect(value)}"
+    end
+
+    :ok
+  end
 
   defp validate_public_attr_value!(_attrs_owner, :font, value)
        when is_atom(value) or is_binary(value),

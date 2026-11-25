@@ -47,6 +47,7 @@ defmodule Emerge.Engine.AttrCodecTest do
       rotate: 45.0,
       scale: 1.25,
       alpha: 0.5,
+      color_matrix: Enum.map(1..20, &(&1 / 10)),
       border_style: :dashed,
       box_shadow: [%{offset_x: 2, offset_y: 3, blur: 8, size: 4, color: :red, inset: false}]
     }

@@ -2614,7 +2614,8 @@ fn render_nodes_have_shadow_pass(nodes: &[RenderNode]) -> bool {
         RenderNode::Clip { children, .. }
         | RenderNode::RelaxedClip { children, .. }
         | RenderNode::Transform { children, .. }
-        | RenderNode::Alpha { children, .. } => render_nodes_have_shadow_pass(children),
+        | RenderNode::Alpha { children, .. }
+        | RenderNode::ColorFilter { children, .. } => render_nodes_have_shadow_pass(children),
         RenderNode::PaintLayer(layer) => paint_layer_content_has_shadow_pass(&layer.content.nodes),
         RenderNode::Primitive(_) => false,
     })
@@ -2630,7 +2631,8 @@ fn paint_layer_content_has_shadow_pass(content: &[RenderPaintLayerContentNode]) 
         RenderPaintLayerContentNode::Clip { children, .. }
         | RenderPaintLayerContentNode::RelaxedClip { children, .. }
         | RenderPaintLayerContentNode::Transform { children, .. }
-        | RenderPaintLayerContentNode::Alpha { children, .. } => {
+        | RenderPaintLayerContentNode::Alpha { children, .. }
+        | RenderPaintLayerContentNode::ColorFilter { children, .. } => {
             paint_layer_content_has_shadow_pass(children)
         }
     })
@@ -2642,7 +2644,8 @@ fn render_nodes_have_text(nodes: &[RenderNode]) -> bool {
         | RenderNode::Clip { children, .. }
         | RenderNode::RelaxedClip { children, .. }
         | RenderNode::Transform { children, .. }
-        | RenderNode::Alpha { children, .. } => render_nodes_have_text(children),
+        | RenderNode::Alpha { children, .. }
+        | RenderNode::ColorFilter { children, .. } => render_nodes_have_text(children),
         RenderNode::PaintLayer(layer) => paint_layer_content_has_text(&layer.content.nodes),
         RenderNode::Primitive(DrawPrimitive::TextWithFont(..)) => true,
         RenderNode::Primitive(_) => false,
@@ -2659,7 +2662,8 @@ fn paint_layer_content_has_text(content: &[RenderPaintLayerContentNode]) -> bool
         | RenderPaintLayerContentNode::Clip { children, .. }
         | RenderPaintLayerContentNode::RelaxedClip { children, .. }
         | RenderPaintLayerContentNode::Transform { children, .. }
-        | RenderPaintLayerContentNode::Alpha { children, .. } => {
+        | RenderPaintLayerContentNode::Alpha { children, .. }
+        | RenderPaintLayerContentNode::ColorFilter { children, .. } => {
             paint_layer_content_has_text(children)
         }
     })
@@ -2812,7 +2816,8 @@ fn moving_paint_layer_payload_resource_generation(nodes: &[RenderNode]) -> Optio
             RenderNode::Clip { children, .. }
             | RenderNode::RelaxedClip { children, .. }
             | RenderNode::Transform { children, .. }
-            | RenderNode::Alpha { children, .. } => {
+            | RenderNode::Alpha { children, .. }
+            | RenderNode::ColorFilter { children, .. } => {
                 moving_paint_layer_payload_resource_generation(children)?
             }
             RenderNode::PaintLayer(_) => 0,
@@ -3762,6 +3767,34 @@ fn hash_visible_clip_scope(
     ready
 }
 
+/// Saves a layer that draws through a 4x5 row-major color matrix; `canvas.restore()` ends it.
+fn save_color_filter_layer(canvas: &skia_safe::Canvas, matrix: &[f32; 20]) {
+    let mut paint = skia_safe::Paint::default();
+    paint.set_color_filter(skia_safe::color_filters::matrix_row_major(matrix, None));
+    canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint));
+}
+
+/// Runs `draw` inside a color matrix layer, counted with the alpha layers.
+fn render_with_color_filter<I: DrawInstrumentation>(
+    canvas: &skia_safe::Canvas,
+    matrix: &[f32; 20],
+    children: usize,
+    instrumentation: &mut I,
+    draw: impl FnOnce(&mut I),
+) {
+    if children == 0 {
+        return;
+    }
+    instrumentation.record_alpha_layer(children);
+    measure_draw(instrumentation, DrawDurationKind::Alphas, || {
+        save_color_filter_layer(canvas, matrix)
+    });
+    draw(instrumentation);
+    measure_draw(instrumentation, DrawDurationKind::Alphas, || {
+        canvas.restore();
+    });
+}
+
 fn hash_visible_render_node(
     node: &RenderNode,
     renderer_cache: &RendererCacheManager,
@@ -3830,6 +3863,14 @@ fn hash_visible_render_node(
                 hasher,
             );
             "alpha-group-end".hash(hasher);
+            ready
+        }
+        RenderNode::ColorFilter { matrix, children } => {
+            "color-filter-start".hash(hasher);
+            crate::render_scene::hash_paint_layer_f32s(hasher, matrix, PaintLayerHashFloat::Exact);
+            let ready =
+                hash_visible_render_nodes(children, renderer_cache, eligibility, alpha, hasher);
+            "color-filter-end".hash(hasher);
             ready
         }
         RenderNode::PaintLayer(layer) => {
@@ -3997,6 +4038,19 @@ fn hash_visible_paint_layer_content_node(
                 hasher,
             );
             "alpha-group-end".hash(hasher);
+            ready
+        }
+        RenderPaintLayerContentNode::ColorFilter { matrix, children } => {
+            "color-filter-start".hash(hasher);
+            crate::render_scene::hash_paint_layer_f32s(hasher, matrix, PaintLayerHashFloat::Exact);
+            let ready = hash_visible_paint_layer_content(
+                children,
+                renderer_cache,
+                eligibility,
+                alpha,
+                hasher,
+            );
+            "color-filter-end".hash(hasher);
             ready
         }
     }
@@ -4356,6 +4410,17 @@ impl SceneRenderer {
                         video_state,
                     );
                     canvas.restore();
+                }
+                // The policy masks classify the drawn content; the colors of the matrix stay out,
+                // its alpha scale counts like an alpha layer.
+                RenderNode::ColorFilter { matrix, children } => {
+                    Self::render_grayscale_policy_nodes(
+                        canvas,
+                        children,
+                        pass,
+                        inherited_alpha * matrix[18].clamp(0.0, 1.0),
+                        video_state,
+                    );
                 }
                 RenderNode::PaintLayer(layer) => {
                     Self::render_grayscale_policy_nodes(
@@ -5248,6 +5313,25 @@ impl SceneRenderer {
                         instrumentation,
                     );
                 }
+                RenderPaintLayerContentNode::ColorFilter { matrix, children } => {
+                    render_with_color_filter(
+                        canvas,
+                        matrix,
+                        children.len(),
+                        instrumentation,
+                        |instrumentation| {
+                            Self::render_paint_layer_content_in_mode(
+                                canvas,
+                                layer,
+                                children,
+                                mode,
+                                options,
+                                eligibility,
+                                instrumentation,
+                            )
+                        },
+                    );
+                }
             }
         }
     }
@@ -5721,6 +5805,22 @@ impl SceneRenderer {
                     options,
                     eligibility,
                     instrumentation,
+                ),
+                RenderNode::ColorFilter { matrix, children } => render_with_color_filter(
+                    canvas,
+                    matrix,
+                    children.len(),
+                    instrumentation,
+                    |instrumentation| {
+                        Self::render_nodes_in_mode(
+                            canvas,
+                            children,
+                            mode,
+                            options,
+                            eligibility,
+                            instrumentation,
+                        )
+                    },
                 ),
                 RenderNode::PaintLayer(layer) => {
                     if M::RENDER_PAINT_LAYERS {

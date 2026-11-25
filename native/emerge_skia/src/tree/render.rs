@@ -695,14 +695,11 @@ fn build_element_subtree<R: RegistryTraversalSink>(
         );
     }
 
-    if declared_animation && !local.is_empty() {
-        local = wrap_with_compositor_animation_layer(
-            wrap_with_alpha(local, alpha),
-            element,
-            render_frame,
-        );
+    let local_effects = wrap_with_effects(local, alpha, attrs.color_matrix);
+    if declared_animation && !local_effects.is_empty() {
+        local = wrap_with_compositor_animation_layer(local_effects, element, render_frame);
     } else {
-        local = wrap_with_alpha(local, alpha);
+        local = local_effects;
     }
 
     // The local transform context dropped the outer clip_nearby clips.
@@ -718,7 +715,7 @@ fn build_element_subtree<R: RegistryTraversalSink>(
 
     RenderSubtree {
         local,
-        escapes: wrap_with_alpha(escapes, alpha),
+        escapes: wrap_with_effects(escapes, alpha, attrs.color_matrix),
         text_input_focused: false,
         text_input_cursor_area: None,
     }
@@ -807,6 +804,10 @@ fn remove_composition_clip_node(
             alpha,
             children: remove_composition_clips(children, composition_clips),
         }],
+        RenderNode::ColorFilter { matrix, children } => vec![RenderNode::ColorFilter {
+            matrix,
+            children: remove_composition_clips(children, composition_clips),
+        }],
         RenderNode::PaintLayer(layer) => {
             let children = remove_composition_clips(layer.content_nodes(), composition_clips);
             vec![RenderNode::PaintLayer(layer.with_children(children))]
@@ -872,6 +873,10 @@ fn offset_render_node(node: RenderNode, dx: f32, dy: f32) -> RenderNode {
         },
         RenderNode::Alpha { alpha, children } => RenderNode::Alpha {
             alpha,
+            children: offset_render_nodes(children, dx, dy),
+        },
+        RenderNode::ColorFilter { matrix, children } => RenderNode::ColorFilter {
+            matrix,
             children: offset_render_nodes(children, dx, dy),
         },
         RenderNode::PaintLayer(layer) => {
@@ -1534,12 +1539,13 @@ fn build_paragraph_subtree<H: HostRegistryTraversalSink>(
                 .chain(text)
                 .chain(collect_border_nodes(frame, attrs))
                 .collect();
-            wrap_with_alpha(
+            wrap_with_effects(
                 outer
                     .into_iter()
                     .chain(wrap_with_host_clip(normal, current_host_clip))
                     .collect(),
                 attrs.alpha.unwrap_or(1.0) as f32,
+                attrs.color_matrix,
             )
         }));
     }
@@ -1713,7 +1719,8 @@ fn render_node_has_shadow_escape(node: &RenderNode) -> bool {
         RenderNode::Clip { children, .. }
         | RenderNode::RelaxedClip { children, .. }
         | RenderNode::Transform { children, .. }
-        | RenderNode::Alpha { children, .. } => {
+        | RenderNode::Alpha { children, .. }
+        | RenderNode::ColorFilter { children, .. } => {
             children.iter().any(render_node_contains_shadow_pass)
         }
         RenderNode::Primitive(_) => false,
@@ -1726,7 +1733,8 @@ fn render_node_contains_shadow_pass(node: &RenderNode) -> bool {
         RenderNode::Clip { children, .. }
         | RenderNode::RelaxedClip { children, .. }
         | RenderNode::Transform { children, .. }
-        | RenderNode::Alpha { children, .. } => {
+        | RenderNode::Alpha { children, .. }
+        | RenderNode::ColorFilter { children, .. } => {
             children.iter().any(render_node_contains_shadow_pass)
         }
         RenderNode::PaintLayer(layer) => layer
@@ -1960,6 +1968,37 @@ fn wrap_with_transform(
         transform,
         children: nodes,
     }]
+}
+
+const IDENTITY_COLOR_MATRIX: [f32; 20] = [
+    1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    0.0,
+];
+
+/// Alpha and color matrix of an element in one layer: an alpha below 1 scales the alpha row of the
+/// matrix; an identity matrix draws no layer.
+fn wrap_with_effects(
+    nodes: Vec<RenderNode>,
+    alpha: f32,
+    matrix: Option<[f32; 20]>,
+) -> Vec<RenderNode> {
+    match matrix {
+        Some(matrix) if !nodes.is_empty() && matrix != IDENTITY_COLOR_MATRIX => {
+            let alpha = alpha.clamp(0.0, 1.0);
+            let matrix = std::array::from_fn(|i| {
+                if i >= 15 {
+                    matrix[i] * alpha
+                } else {
+                    matrix[i]
+                }
+            });
+            vec![RenderNode::ColorFilter {
+                matrix,
+                children: nodes,
+            }]
+        }
+        _ => wrap_with_alpha(nodes, alpha),
+    }
 }
 
 fn wrap_with_alpha(nodes: Vec<RenderNode>, alpha: f32) -> Vec<RenderNode> {

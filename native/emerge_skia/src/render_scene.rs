@@ -55,7 +55,8 @@ fn collect_video_target_ids(nodes: &[RenderNode], targets: &mut HashSet<String>)
         | RenderNode::Clip { children, .. }
         | RenderNode::RelaxedClip { children, .. }
         | RenderNode::Transform { children, .. }
-        | RenderNode::Alpha { children, .. } => collect_video_target_ids(children, targets),
+        | RenderNode::Alpha { children, .. }
+        | RenderNode::ColorFilter { children, .. } => collect_video_target_ids(children, targets),
         RenderNode::PaintLayer(layer) => {
             collect_video_target_ids_from_layer_content(layer.content.nodes.as_slice(), targets)
         }
@@ -79,7 +80,8 @@ fn collect_video_target_ids_from_layer_content(
         | RenderPaintLayerContentNode::Clip { children, .. }
         | RenderPaintLayerContentNode::RelaxedClip { children, .. }
         | RenderPaintLayerContentNode::Transform { children, .. }
-        | RenderPaintLayerContentNode::Alpha { children, .. } => {
+        | RenderPaintLayerContentNode::Alpha { children, .. }
+        | RenderPaintLayerContentNode::ColorFilter { children, .. } => {
             collect_video_target_ids_from_layer_content(children, targets)
         }
     });
@@ -91,7 +93,10 @@ fn nodes_have_payload_cache_candidate_layers(nodes: &[RenderNode]) -> bool {
         | RenderNode::Clip { children, .. }
         | RenderNode::RelaxedClip { children, .. }
         | RenderNode::Transform { children, .. }
-        | RenderNode::Alpha { children, .. } => nodes_have_payload_cache_candidate_layers(children),
+        | RenderNode::Alpha { children, .. }
+        | RenderNode::ColorFilter { children, .. } => {
+            nodes_have_payload_cache_candidate_layers(children)
+        }
         RenderNode::PaintLayer(layer) => {
             layer.policy.allows_payload_cache()
                 || layer_content_has_payload_cache_candidate(&layer.content.nodes)
@@ -111,7 +116,8 @@ fn layer_content_has_payload_cache_candidate(content: &[RenderPaintLayerContentN
         | RenderPaintLayerContentNode::Clip { children, .. }
         | RenderPaintLayerContentNode::RelaxedClip { children, .. }
         | RenderPaintLayerContentNode::Transform { children, .. }
-        | RenderPaintLayerContentNode::Alpha { children, .. } => {
+        | RenderPaintLayerContentNode::Alpha { children, .. }
+        | RenderPaintLayerContentNode::ColorFilter { children, .. } => {
             layer_content_has_payload_cache_candidate(children)
         }
     })
@@ -123,7 +129,10 @@ fn nodes_have_scroll_moving_paint_layers(nodes: &[RenderNode]) -> bool {
         | RenderNode::Clip { children, .. }
         | RenderNode::RelaxedClip { children, .. }
         | RenderNode::Transform { children, .. }
-        | RenderNode::Alpha { children, .. } => nodes_have_scroll_moving_paint_layers(children),
+        | RenderNode::Alpha { children, .. }
+        | RenderNode::ColorFilter { children, .. } => {
+            nodes_have_scroll_moving_paint_layers(children)
+        }
         RenderNode::PaintLayer(layer) => {
             layer.placement == PaintLayerPlacement::ScrollMoving
                 || layer_content_has_scroll_moving_paint_layer(&layer.content.nodes)
@@ -143,7 +152,8 @@ fn layer_content_has_scroll_moving_paint_layer(content: &[RenderPaintLayerConten
         | RenderPaintLayerContentNode::Clip { children, .. }
         | RenderPaintLayerContentNode::RelaxedClip { children, .. }
         | RenderPaintLayerContentNode::Transform { children, .. }
-        | RenderPaintLayerContentNode::Alpha { children, .. } => {
+        | RenderPaintLayerContentNode::Alpha { children, .. }
+        | RenderPaintLayerContentNode::ColorFilter { children, .. } => {
             layer_content_has_scroll_moving_paint_layer(children)
         }
     })
@@ -158,6 +168,7 @@ pub struct RenderSceneSummary {
     pub clip_shapes: usize,
     pub transforms: usize,
     pub alphas: usize,
+    pub color_filters: usize,
     pub primitives: usize,
     pub rects: usize,
     pub rounded_rects: usize,
@@ -213,6 +224,10 @@ impl RenderSceneSummary {
                     self.alphas += 1;
                     self.record_nodes(children);
                 }
+                RenderNode::ColorFilter { children, .. } => {
+                    self.color_filters += 1;
+                    self.record_nodes(children);
+                }
                 RenderNode::PaintLayer(layer) => self.record_paint_layer(layer),
                 RenderNode::Primitive(primitive) => self.record_primitive(primitive),
             }
@@ -262,6 +277,11 @@ impl RenderSceneSummary {
                 self.alphas += 1;
                 self.record_layer_content(children);
             }
+            RenderPaintLayerContentNode::ColorFilter { children, .. } => {
+                self.nodes += 1;
+                self.color_filters += 1;
+                self.record_layer_content(children);
+            }
         });
     }
 
@@ -296,7 +316,7 @@ impl fmt::Display for RenderSceneSummary {
             f,
             concat!(
                 "nodes={} primitives={} scopes={{shadow_passes={} clips={} relaxed_clips={} ",
-                "clip_shapes={} transforms={} alphas={}}} draws={{rects={} rounded_rects={} ",
+                "clip_shapes={} transforms={} alphas={} color_filters={}}} draws={{rects={} rounded_rects={} ",
                 "borders={} border_corners={} border_edges={} shadows={} inset_shadows={} ",
                 "texts={} text_bytes={} gradients={} images={} videos={} image_loading={} ",
                 "image_failed={}}} paint_layers={{total={} cacheable={} moving={} direct_only={}}}"
@@ -309,6 +329,7 @@ impl fmt::Display for RenderSceneSummary {
             self.clip_shapes,
             self.transforms,
             self.alphas,
+            self.color_filters,
             self.rects,
             self.rounded_rects,
             self.borders,
@@ -350,6 +371,11 @@ pub enum RenderNode {
     },
     Alpha {
         alpha: f32,
+        children: Vec<RenderNode>,
+    },
+    /// The children drawn through a 4x5 row-major color matrix, as `color_matrix` declares it.
+    ColorFilter {
+        matrix: [f32; 20],
         children: Vec<RenderNode>,
     },
     PaintLayer(RenderPaintLayer),
@@ -579,6 +605,10 @@ pub enum RenderPaintLayerContentNode {
         alpha: f32,
         children: Vec<RenderPaintLayerContentNode>,
     },
+    ColorFilter {
+        matrix: [f32; 20],
+        children: Vec<RenderPaintLayerContentNode>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -644,6 +674,14 @@ fn append_ordered_layer_node(content: &mut Vec<RenderPaintLayerContentNode>, nod
                 children: build_ordered_layer_content(children),
             });
         }
+        RenderNode::ColorFilter { matrix, children }
+            if render_nodes_contain_paint_layer(&children) =>
+        {
+            content.push(RenderPaintLayerContentNode::ColorFilter {
+                matrix,
+                children: build_ordered_layer_content(children),
+            });
+        }
         own => append_own_render_node(content, own),
     }
 }
@@ -686,6 +724,12 @@ fn append_composition_layer_node(content: &mut Vec<RenderPaintLayerContentNode>,
             alpha,
             children: build_composition_layer_content(children),
         }),
+        RenderNode::ColorFilter { matrix, children } => {
+            content.push(RenderPaintLayerContentNode::ColorFilter {
+                matrix,
+                children: build_composition_layer_content(children),
+            })
+        }
         RenderNode::Primitive(_) => append_own_render_node(content, node),
     }
 }
@@ -707,7 +751,8 @@ fn render_nodes_contain_paint_layer(nodes: &[RenderNode]) -> bool {
         | RenderNode::Clip { children, .. }
         | RenderNode::RelaxedClip { children, .. }
         | RenderNode::Transform { children, .. }
-        | RenderNode::Alpha { children, .. } => render_nodes_contain_paint_layer(children),
+        | RenderNode::Alpha { children, .. }
+        | RenderNode::ColorFilter { children, .. } => render_nodes_contain_paint_layer(children),
         RenderNode::Primitive(_) => false,
     })
 }
@@ -739,7 +784,8 @@ fn assign_layer_run_metadata(
         | RenderPaintLayerContentNode::Clip { children, .. }
         | RenderPaintLayerContentNode::RelaxedClip { children, .. }
         | RenderPaintLayerContentNode::Transform { children, .. }
-        | RenderPaintLayerContentNode::Alpha { children, .. } => {
+        | RenderPaintLayerContentNode::Alpha { children, .. }
+        | RenderPaintLayerContentNode::ColorFilter { children, .. } => {
             assign_layer_run_metadata(children, bounds, next_slot)
         }
     });
@@ -756,7 +802,8 @@ fn collect_layer_own_payload_nodes(
         | RenderPaintLayerContentNode::Clip { children, .. }
         | RenderPaintLayerContentNode::RelaxedClip { children, .. }
         | RenderPaintLayerContentNode::Transform { children, .. }
-        | RenderPaintLayerContentNode::Alpha { children, .. } => {
+        | RenderPaintLayerContentNode::Alpha { children, .. }
+        | RenderPaintLayerContentNode::ColorFilter { children, .. } => {
             collect_layer_own_payload_nodes(children, nodes)
         }
     });
@@ -774,7 +821,8 @@ fn collect_layer_own_runs<'a>(
         | RenderPaintLayerContentNode::Clip { children, .. }
         | RenderPaintLayerContentNode::RelaxedClip { children, .. }
         | RenderPaintLayerContentNode::Transform { children, .. }
-        | RenderPaintLayerContentNode::Alpha { children, .. } => {
+        | RenderPaintLayerContentNode::Alpha { children, .. }
+        | RenderPaintLayerContentNode::ColorFilter { children, .. } => {
             collect_layer_own_runs(children, runs)
         }
     });
@@ -795,7 +843,8 @@ fn collect_layer_descendants<'a>(
         | RenderPaintLayerContentNode::Clip { children, .. }
         | RenderPaintLayerContentNode::RelaxedClip { children, .. }
         | RenderPaintLayerContentNode::Transform { children, .. }
-        | RenderPaintLayerContentNode::Alpha { children, .. } => {
+        | RenderPaintLayerContentNode::Alpha { children, .. }
+        | RenderPaintLayerContentNode::ColorFilter { children, .. } => {
             collect_layer_descendants(children, layers)
         }
     });
@@ -813,7 +862,8 @@ fn layer_content_child_layer_count(content: &[RenderPaintLayerContentNode]) -> u
             | RenderPaintLayerContentNode::Clip { children, .. }
             | RenderPaintLayerContentNode::RelaxedClip { children, .. }
             | RenderPaintLayerContentNode::Transform { children, .. }
-            | RenderPaintLayerContentNode::Alpha { children, .. } => {
+            | RenderPaintLayerContentNode::Alpha { children, .. }
+            | RenderPaintLayerContentNode::ColorFilter { children, .. } => {
                 layer_content_child_layer_count(children)
             }
         })
@@ -851,6 +901,12 @@ fn layer_content_own_render_nodes(content: &[RenderPaintLayerContentNode]) -> Ve
             RenderPaintLayerContentNode::Alpha { alpha, children } => {
                 nonempty_scoped_own_nodes(children, |children| RenderNode::Alpha {
                     alpha: *alpha,
+                    children,
+                })
+            }
+            RenderPaintLayerContentNode::ColorFilter { matrix, children } => {
+                nonempty_scoped_own_nodes(children, |children| RenderNode::ColorFilter {
+                    matrix: *matrix,
                     children,
                 })
             }
@@ -901,6 +957,12 @@ fn layer_content_to_render_nodes(content: &[RenderPaintLayerContentNode]) -> Vec
                 alpha: *alpha,
                 children: layer_content_to_render_nodes(children),
             }],
+            RenderPaintLayerContentNode::ColorFilter { matrix, children } => {
+                vec![RenderNode::ColorFilter {
+                    matrix: *matrix,
+                    children: layer_content_to_render_nodes(children),
+                }]
+            }
         })
         .collect()
 }
@@ -953,7 +1015,9 @@ fn render_node_metrics(node: &RenderNode) -> RenderNodeMetrics {
             metrics.primitive_cost = metrics.primitive_cost.saturating_add(3);
             metrics
         }
-        RenderNode::Transform { children, .. } | RenderNode::Alpha { children, .. } => {
+        RenderNode::Transform { children, .. }
+        | RenderNode::Alpha { children, .. }
+        | RenderNode::ColorFilter { children, .. } => {
             let mut metrics = render_nodes_metrics(children);
             metrics.node_count = metrics.node_count.saturating_add(1);
             metrics.primitive_cost = metrics.primitive_cost.saturating_add(2);
@@ -1011,7 +1075,9 @@ fn render_nodes_visual_bounds(nodes: &[RenderNode], transform: Affine2) -> Optio
 
 fn render_node_visual_bounds(node: &RenderNode, transform: Affine2) -> Option<Rect> {
     match node {
-        RenderNode::ShadowPass { children } | RenderNode::Alpha { children, .. } => {
+        RenderNode::ShadowPass { children }
+        | RenderNode::Alpha { children, .. }
+        | RenderNode::ColorFilter { children, .. } => {
             render_nodes_visual_bounds(children, transform)
         }
         RenderNode::Clip { clips, children } | RenderNode::RelaxedClip { clips, children } => {
@@ -1348,6 +1414,15 @@ pub(crate) fn hash_paint_layer_render_node<H: Hasher>(
             }
             4u8.hash(hasher);
             float.hash_f32(hasher, *alpha);
+            hash_paint_layer_render_nodes(hasher, children, float, payload_bounds);
+            true
+        }
+        RenderNode::ColorFilter { matrix, children } => {
+            if !paint_layer_render_nodes_intersect_payload(children, payload_bounds) {
+                return false;
+            }
+            7u8.hash(hasher);
+            hash_paint_layer_f32s(hasher, matrix, float);
             hash_paint_layer_render_nodes(hasher, children, float, payload_bounds);
             true
         }

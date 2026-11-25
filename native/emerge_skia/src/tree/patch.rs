@@ -393,6 +393,7 @@ fn plain_wrapper_attrs(attrs: &Attrs) -> bool {
         && attrs.rotate.is_none()
         && attrs.scale.is_none()
         && attrs.alpha.is_none()
+        && attrs.color_matrix.is_none()
         && !attrs_affect_interaction_or_registry(attrs)
 }
 
@@ -460,6 +461,7 @@ fn plain_text_leaf_attrs(attrs: &Attrs) -> bool {
         && attrs.rotate.is_none()
         && attrs.scale.is_none()
         && attrs.alpha.is_none()
+        && attrs.color_matrix.is_none()
         && !attrs_affect_interaction_or_registry(attrs)
 }
 
@@ -876,6 +878,7 @@ fn attrs_equivalent_for_plain_text_paint(before: &Attrs, after: &Attrs) -> bool 
         && before.rotate == after.rotate
         && before.scale == after.scale
         && before.alpha == after.alpha
+        && before.color_matrix == after.color_matrix
         && before.svg_color == after.svg_color
         && before.svg_expected == after.svg_expected
 }

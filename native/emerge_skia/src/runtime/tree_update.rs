@@ -1966,7 +1966,8 @@ mod tests {
                     RenderNode::ShadowPass { children }
                     | RenderNode::Clip { children, .. }
                     | RenderNode::RelaxedClip { children, .. }
-                    | RenderNode::Alpha { children, .. } => collect(children, txs),
+                    | RenderNode::Alpha { children, .. }
+                    | RenderNode::ColorFilter { children, .. } => collect(children, txs),
                     RenderNode::Transform {
                         transform,
                         children,

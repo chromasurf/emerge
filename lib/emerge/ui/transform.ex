@@ -207,4 +207,65 @@ defmodule Emerge.UI.Transform do
   """
   @spec alpha(number()) :: {:alpha, number()}
   def alpha(value) when is_number(value), do: {:alpha, value}
+
+  # Rec. 709 luminance weights.
+  @luma [0.2126, 0.7152, 0.0722]
+
+  @doc """
+  Draw the element subtree through a color matrix: grayscale, a tint or any 4x5 matrix.
+
+    * `:grayscale` or `{:grayscale, amount}` - `amount` from `0.0` (unchanged) to `1.0` (gray)
+    * `{:tint, color}` - the luminance of each pixel in that color, such as `color(:sky)` or
+      `color_rgb(0, 120, 255)`, as a duotone from black to the color; the alpha of the color is
+      ignored
+    * a list of 20 numbers - a 4x5 matrix in row-major order: each output channel R, G, B, A is
+      the dot product of its row with `[r, g, b, a, 1]`, channels from `0.0` to `1.0`; the last
+      value, the offset of the alpha row, is `0`
+
+  Like `alpha/1`, the subtree draws into its own layer, one layer for both; the identity matrix
+  draws none.
+
+  ## Example
+
+  ```elixir
+  el([Transform.color_matrix(:grayscale)], video([width(fill()), height(fill())], :camera))
+  ```
+  """
+  @spec color_matrix(
+          :grayscale
+          | {:grayscale, number()}
+          | {:tint, {:color_rgb, {0..255, 0..255, 0..255}} | {:color_rgba, tuple()}}
+          | [number()]
+        ) ::
+          {:color_matrix, [number()]}
+  def color_matrix(:grayscale), do: color_matrix({:grayscale, 1.0})
+
+  def color_matrix({:grayscale, amount}) when is_number(amount) and amount >= 0 and amount <= 1 do
+    rgb_matrix(
+      for channel <- 0..2 do
+        Enum.with_index(@luma, fn weight, column ->
+          weight * amount + if(column == channel, do: 1 - amount, else: 0)
+        end)
+      end
+    )
+  end
+
+  def color_matrix({:tint, {:color_rgb, {r, g, b}}}),
+    do: rgb_matrix(for channel <- [r, g, b], do: Enum.map(@luma, &(&1 * channel / 255)))
+
+  def color_matrix({:tint, {:color_rgba, {r, g, b, _a}}}),
+    do: color_matrix({:tint, {:color_rgb, {r, g, b}}})
+
+  def color_matrix(matrix) when is_list(matrix) and length(matrix) == 20,
+    do: {:color_matrix, matrix}
+
+  def color_matrix(other) do
+    raise ArgumentError,
+          "color_matrix/1 expects :grayscale, {:grayscale, 0..1}, {:tint, color} or 20 numbers, " <>
+            "got: #{inspect(other)}"
+  end
+
+  # Rows of weights on r, g, b for the color channels; alpha passes through.
+  defp rgb_matrix(rows),
+    do: {:color_matrix, Enum.flat_map(rows, &(&1 ++ [0, 0])) ++ [0, 0, 0, 1, 0]}
 end

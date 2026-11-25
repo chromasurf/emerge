@@ -89,7 +89,8 @@ defmodule Emerge.Engine.AttrCodec do
     scroll_position_y: 86,
     on_scroll: 87,
     on_drag: 88,
-    pass_pointer: 89
+    pass_pointer: 89,
+    color_matrix: 90
   }
 
   @tag_type Map.new(@type_tag, fn {type, tag} -> {tag, type} end)
@@ -162,6 +163,7 @@ defmodule Emerge.Engine.AttrCodec do
   defp encode_value(:rotate, value), do: encode_f64(value)
   defp encode_value(:scale, value), do: encode_f64(value)
   defp encode_value(:alpha, value), do: encode_f64(value)
+  defp encode_value(:color_matrix, values), do: Enum.map(values, &encode_f64/1)
   defp encode_value(:space_evenly, value), do: encode_bool(value)
 
   defp encode_value(axis, value) when axis in [:scroll_position_x, :scroll_position_y] do
@@ -255,6 +257,10 @@ defmodule Emerge.Engine.AttrCodec do
   defp decode_value(:rotate, rest), do: decode_f64(rest)
   defp decode_value(:scale, rest), do: decode_f64(rest)
   defp decode_value(:alpha, rest), do: decode_f64(rest)
+
+  defp decode_value(:color_matrix, <<values::binary-size(160), rest::binary>>),
+    do: {for(<<value::float-64 <- values>>, do: value), rest}
+
   defp decode_value(:space_evenly, rest), do: decode_bool(rest)
 
   defp decode_value(axis, <<0, value::float-big-64, rest::binary>>)
