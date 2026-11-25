@@ -992,11 +992,19 @@ pub fn text_surface_props() -> SurfaceProps {
     SurfaceProps::new(SurfacePropsFlags::default(), PixelGeometry::RGBH)
 }
 
+// Subpixel antialiasing assumes RGB stripes along the layout's x axis. A quarter-turned output puts
+// them along y, where it draws colored fringes, so text there is antialiased in grayscale.
+static GRAYSCALE_TEXT: AtomicBool = AtomicBool::new(false);
+
 fn configure_text_font(font: &mut Font) {
     font.set_subpixel(true);
     font.set_linear_metrics(true);
     font.set_baseline_snap(true);
-    font.set_edging(FontEdging::SubpixelAntiAlias);
+    font.set_edging(if GRAYSCALE_TEXT.load(Ordering::Relaxed) {
+        FontEdging::AntiAlias
+    } else {
+        FontEdging::SubpixelAntiAlias
+    });
     font.set_hinting(FontHinting::Normal);
 }
 
@@ -4272,6 +4280,10 @@ impl SceneRenderer {
 
     /// Turns the scene onto the surface; the transform follows the surface size of each frame.
     pub fn set_output_rotation(&mut self, rotation: OutputRotation) {
+        GRAYSCALE_TEXT.store(
+            matches!(rotation, OutputRotation::Deg90 | OutputRotation::Deg270),
+            Ordering::Relaxed,
+        );
         if self.output_rotation != rotation {
             self.output_rotation = rotation;
             self.last_visible_frame_fingerprint = None;
