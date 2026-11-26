@@ -137,11 +137,6 @@ pub(crate) fn remaining_progress(curve: &AnimationCurve, anchor: f64, now: f64) 
         return 0.0;
     }
     let linear = (t - a) / (1.0 - a);
-    // The spring keeps its overshoot, so it skips the clamp below.
-    if let AnimationCurve::Spring = curve {
-        let from = spring(a);
-        return (spring(t) - from) / (1.0 - from);
-    }
     match curve {
         AnimationCurve::Linear => linear,
         AnimationCurve::EaseIn => linear * (t * t + t * a + a * a) / (1.0 + a + a * a),
@@ -153,7 +148,16 @@ pub(crate) fn remaining_progress(curve: &AnimationCurve, anchor: f64, now: f64) 
         AnimationCurve::EaseInOut => {
             4.0 * (t - a) * (t * t + t * a + a * a) / (1.0 - 4.0 * a.powi(3))
         }
-        AnimationCurve::Spring => unreachable!("handled above"),
+        // The spring keeps its overshoot, so it returns before the clamp. From about 45 % on it is
+        // at or past its target and starts again over the rest of the interval.
+        AnimationCurve::Spring => {
+            let from = spring(a);
+            return if from < 0.95 {
+                (spring(t) - from) / (1.0 - from)
+            } else {
+                spring(linear)
+            };
+        }
     }
     .clamp(0.0, 1.0)
 }
@@ -216,5 +220,20 @@ mod tests {
         let a = 1.0 - 1e-8;
         let t = a + (1.0 - a) / 2.0;
         assert!((remaining_progress(&AnimationCurve::EaseOut, a, t) - 0.875).abs() < 1e-7);
+    }
+
+    #[test]
+    fn spring_retarget_runs_from_zero_to_one_also_past_its_overshoot() {
+        for a in [0.0, 0.2, 0.45, 0.6, 0.9] {
+            assert_eq!(remaining_progress(&AnimationCurve::Spring, a, a), 0.0);
+            assert_eq!(remaining_progress(&AnimationCurve::Spring, a, 1.0), 1.0);
+            for fraction in [0.1, 0.5, 0.9] {
+                let p = remaining_progress(&AnimationCurve::Spring, a, a + (1.0 - a) * fraction);
+                assert!(
+                    p.is_finite() && p > 0.0 && p < 1.2,
+                    "a={a} fraction={fraction}: {p}"
+                );
+            }
+        }
     }
 }
