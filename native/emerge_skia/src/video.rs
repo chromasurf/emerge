@@ -172,6 +172,7 @@ static NEXT_RENDERER_EPOCH: AtomicU64 = AtomicU64::new(1);
 const DRM_FORMAT_NV12: u32 = fourcc(b'N', b'V', b'1', b'2');
 const DRM_FORMAT_ABGR8888: u32 = fourcc(b'A', b'B', b'2', b'4');
 const DRM_FORMAT_XRGB8888: u32 = fourcc(b'X', b'R', b'2', b'4');
+const DRM_FORMAT_ARGB8888: u32 = fourcc(b'A', b'R', b'2', b'4');
 #[cfg(any(
     all(all(feature = "wayland", feature = "opengl"), target_os = "linux"),
     all(all(feature = "drm", feature = "opengl"), target_os = "linux")
@@ -414,10 +415,10 @@ fn validate_prime_target(
 
     if !matches!(
         frame_format,
-        DRM_FORMAT_NV12 | DRM_FORMAT_ABGR8888 | DRM_FORMAT_XRGB8888
+        DRM_FORMAT_NV12 | DRM_FORMAT_ABGR8888 | DRM_FORMAT_ARGB8888 | DRM_FORMAT_XRGB8888
     ) {
         return Err(format!(
-            "unsupported DRM format {frame_format:#x}; supported formats are NV12, ABGR8888, and XRGB8888"
+            "unsupported DRM format {frame_format:#x}; supported formats are NV12, ABGR8888, ARGB8888, and XRGB8888"
         ));
     }
 
@@ -435,7 +436,11 @@ fn validate_prime_descriptor_layout(
             "PRIME descriptor must contain between 1 and 4 objects, got {object_count}"
         ));
     }
-    if matches!(format, DRM_FORMAT_ABGR8888 | DRM_FORMAT_XRGB8888) && object_count != 1 {
+    if matches!(
+        format,
+        DRM_FORMAT_ABGR8888 | DRM_FORMAT_ARGB8888 | DRM_FORMAT_XRGB8888
+    ) && object_count != 1
+    {
         return Err(format!(
             "packed PRIME format {format:#x} requires one object, got {object_count}"
         ));
@@ -443,7 +448,7 @@ fn validate_prime_descriptor_layout(
 
     let expected_planes = match format {
         DRM_FORMAT_NV12 => 2,
-        DRM_FORMAT_ABGR8888 | DRM_FORMAT_XRGB8888 => 1,
+        DRM_FORMAT_ABGR8888 | DRM_FORMAT_ARGB8888 | DRM_FORMAT_XRGB8888 => 1,
         _ => return Ok(()),
     };
     if planes.len() != expected_planes {
@@ -453,7 +458,10 @@ fn validate_prime_descriptor_layout(
         ));
     }
 
-    let minimum_pitch = if matches!(format, DRM_FORMAT_ABGR8888 | DRM_FORMAT_XRGB8888) {
+    let minimum_pitch = if matches!(
+        format,
+        DRM_FORMAT_ABGR8888 | DRM_FORMAT_ARGB8888 | DRM_FORMAT_XRGB8888
+    ) {
         width
             .checked_mul(4)
             .ok_or_else(|| "ABGR8888 minimum pitch overflow".to_string())?
@@ -1073,7 +1081,10 @@ impl PrimeFrame {
                 (DRM_FORMAT_NV12, 1) => frame.coded_height.div_ceil(2),
                 _ => frame.coded_height,
             };
-            let row_bytes = if matches!(layer.fourcc, DRM_FORMAT_ABGR8888 | DRM_FORMAT_XRGB8888) {
+            let row_bytes = if matches!(
+                layer.fourcc,
+                DRM_FORMAT_ABGR8888 | DRM_FORMAT_ARGB8888 | DRM_FORMAT_XRGB8888
+            ) {
                 u64::from(frame.coded_width) * 4
             } else {
                 u64::from(frame.coded_width)
@@ -3978,8 +3989,7 @@ precision mediump float;
 varying vec2 vTexCoord;
 uniform samplerExternalOES uTex;
 void main() {
-  vec3 rgb = texture2D(uTex, vTexCoord).rgb;
-  gl_FragColor = vec4(rgb, 1.0);
+  gl_FragColor = texture2D(uTex, vTexCoord);
 }
 "#,
         )?;
@@ -7292,7 +7302,12 @@ mod tests {
 
     #[test]
     fn canonical_abgr8888_and_nv12_owned_frames_validate_for_target() {
-        for format in [DRM_FORMAT_ABGR8888, DRM_FORMAT_XRGB8888, DRM_FORMAT_NV12] {
+        for format in [
+            DRM_FORMAT_ABGR8888,
+            DRM_FORMAT_ARGB8888,
+            DRM_FORMAT_XRGB8888,
+            DRM_FORMAT_NV12,
+        ] {
             PrimeFrame::validate_canonical(
                 "preview",
                 VideoMode::Prime,
@@ -8274,7 +8289,7 @@ mod tests {
         )
         .expect_err("unknown format should be rejected");
 
-        assert!(error.contains("supported formats are NV12, ABGR8888, and XRGB8888"));
+        assert!(error.contains("supported formats are NV12, ABGR8888, ARGB8888, and XRGB8888"));
     }
 
     #[test]
