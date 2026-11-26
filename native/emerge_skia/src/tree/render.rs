@@ -634,7 +634,11 @@ fn build_element_subtree<R: RegistryTraversalSink>(
     );
 
     let outer_shadow_nodes = collect_box_shadow_nodes(render_frame, attrs, radius, false);
-    let background_nodes = build_background_nodes(render_frame, attrs);
+    let background_nodes = build_background_nodes(
+        render_frame,
+        attrs,
+        element.runtime.image_fallbacks[1].as_ref(),
+    );
     let inset_shadow_nodes = collect_box_shadow_nodes(render_frame, attrs, radius, true);
     let border_nodes = collect_border_nodes(render_frame, attrs);
     let scrollbar_nodes = collect_scrollbar_nodes(scene_state.as_ref(), render_frame, attrs);
@@ -1520,7 +1524,9 @@ fn build_paragraph_subtree<H: HostRegistryTraversalSink>(
             // only an explicitly supplied color (including active styles/animation).
             // Inline image backgrounds are not part of the text-flow contract.
             let background = match attrs.background {
-                Some(super::attrs::Background::Color(_)) => build_background_nodes(frame, attrs),
+                Some(super::attrs::Background::Color(_)) => {
+                    build_background_nodes(frame, attrs, None)
+                }
                 _ => Vec::new(),
             };
             let normal = background
@@ -1646,7 +1652,11 @@ fn build_own_content_nodes(
                 );
             }
         }
-        ElementKind::Image => nodes.extend(render_image_nodes(frame, attrs)),
+        ElementKind::Image => nodes.extend(render_image_nodes(
+            frame,
+            attrs,
+            element.runtime.image_fallbacks[0].as_ref(),
+        )),
         ElementKind::Video => nodes.extend(render_video_nodes(frame, attrs)),
         _ => {}
     }

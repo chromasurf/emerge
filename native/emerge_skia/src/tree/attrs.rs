@@ -1332,6 +1332,15 @@ fn decode_font_style(cursor: &mut AttrCursor) -> Result<FontStyle, DecodeError> 
     Ok(FontStyle(cursor.read_string_u16()?))
 }
 
+/// The image sources of an element: its `image_src` and its background image.
+pub(crate) fn image_sources(attrs: &Attrs) -> [Option<&ImageSource>; 2] {
+    let background = match &attrs.background {
+        Some(Background::Image { source, .. }) => Some(source),
+        _ => None,
+    };
+    [attrs.image_src.as_ref(), background]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
