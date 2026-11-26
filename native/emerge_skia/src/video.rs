@@ -7361,6 +7361,7 @@ mod tests {
         assert!(!should_sample_luma(false, true));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn unimported_prime_frame_closes_owned_acquire_fence() {
         let mut fds = [-1; 2];
