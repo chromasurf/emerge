@@ -2711,7 +2711,13 @@ fn text_payload_gpu_subpixel_phase(
         && unit_axis(transform.yx, transform.yy)
         && approx_eq(determinant.abs(), 1.0);
     if !pixel_aligned_orthogonal {
-        return Err(RendererCacheRejectionReason::UnsupportedTransform);
+        // During a zoom the unscaled payload follows the scale; the text is softer than a
+        // direct draw until the motion ends at scale one.
+        return if eligibility.motion_scaled() {
+            Ok(PaintLayerSubpixelPhase::default())
+        } else {
+            Err(RendererCacheRejectionReason::UnsupportedTransform)
+        };
     }
 
     // The payload is drawn at `origin - phase` in local space, so its pixels land on the device
@@ -3649,6 +3655,8 @@ struct MovingLayerEligibility {
     clip_empty: bool,
     paint_attributes_eligible: bool,
     image_bleed_device_outset: f32,
+    /// Below a layer in motion: text payloads may follow a scaled transform.
+    in_motion: bool,
 }
 
 impl MovingLayerEligibility {
@@ -3659,7 +3667,26 @@ impl MovingLayerEligibility {
             clip_empty: false,
             paint_attributes_eligible: true,
             image_bleed_device_outset: 0.0,
+            in_motion: false,
         }
+    }
+
+    fn entering_layer(self, layer: &RenderPaintLayer) -> Self {
+        Self {
+            in_motion: self.in_motion || layer.in_motion,
+            ..self
+        }
+    }
+
+    /// In motion under a scale other than one that keeps rectangles axis-aligned; quarter turns
+    /// of the output rotation stay allowed.
+    fn motion_scaled(self) -> bool {
+        let transform = self.current_transform;
+        let determinant = transform.xx * transform.yy - transform.xy * transform.yx;
+        self.in_motion
+            && transform.maps_rects_to_axis_aligned_rects()
+            && determinant.abs() > f32::EPSILON
+            && !approx_eq(determinant.abs(), 1.0)
     }
 
     fn with_transform(self, transform: Affine2) -> Self {
@@ -3918,6 +3945,7 @@ fn hash_visible_paint_layer(
     "paint-layer".hash(hasher);
     layer.id.hash(hasher);
     layer.policy.hash(hasher);
+    layer.in_motion.hash(hasher);
     hash_paint_layer_rect(hasher, layer.bounds, PaintLayerHashFloat::Exact);
     hash_paint_layer_affine2(
         hasher,
@@ -5093,11 +5121,15 @@ impl SceneRenderer {
         };
 
         let admission_estimate = paint_layer_cache_admission_estimate(run, key, visible_pixels);
-        if paint_layer_cache_bypass_low_value(
-            admission_estimate,
-            cache_tracking.gpu_context.is_some(),
-            layer.id.role,
-        ) {
+        // A zoom shows the payload smaller than it is; the visible-pixel estimate would call it
+        // waste, while a direct draw rasterizes the text again in every frame of the motion.
+        if !eligibility.motion_scaled()
+            && paint_layer_cache_bypass_low_value(
+                admission_estimate,
+                cache_tracking.gpu_context.is_some(),
+                layer.id.role,
+            )
+        {
             cache_tracking.frame.record_low_value_bypass();
             if renderer_cache_diagnostics_enabled() {
                 eprintln!(
@@ -5713,11 +5745,16 @@ impl SceneRenderer {
                     paint_bounds_visible_payload_image_rect(run.bounds, payload_bounds, eligibility)
             {
                 let paint = Paint::default();
+                let sampling = if eligibility.motion_scaled() {
+                    SamplingOptions::new(FilterMode::Linear, MipmapMode::None)
+                } else {
+                    SamplingOptions::default()
+                };
                 canvas.draw_image_rect_with_sampling_options(
                     image,
                     Some((&src, SrcRectConstraint::Strict)),
                     dst,
-                    SamplingOptions::default(),
+                    sampling,
                     &paint,
                 );
                 return pixels;
@@ -6635,7 +6672,7 @@ impl<'video> RenderTraversalMode<'video> for CacheTrackingRenderMode<'_, '_> {
             &layer.content.nodes,
             self,
             options,
-            eligibility,
+            eligibility.entering_layer(layer),
             instrumentation,
         );
     }
@@ -10004,6 +10041,147 @@ mod tests {
         let stats = timings.renderer_cache.expect("split scene cache stats");
         assert_eq!(stats.paint_layer.hits, 0);
         assert!(stats.paint_layer.stores >= 3);
+    }
+
+    fn motion_text_layer(label: &str, in_motion: bool) -> RenderPaintLayer {
+        RenderPaintLayer::from_children(
+            21,
+            GeometryRect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 48.0,
+            },
+            PaintLayerPlacement::Fixed,
+            PaintLayerPolicy::Cacheable,
+            PaintLayerReason::Animation,
+            1,
+            vec![RenderNode::Primitive(DrawPrimitive::TextWithFont(
+                8.0,
+                30.0,
+                label.to_string(),
+                18.0,
+                (0x202020FFu32).into(),
+                "default".to_string(),
+                400,
+                false,
+            ))],
+        )
+        .with_motion(in_motion)
+    }
+
+    fn zoom(scale: f32, tx: f32, ty: f32) -> Affine2 {
+        Affine2 {
+            xx: scale,
+            yx: 0.0,
+            xy: 0.0,
+            yy: scale,
+            tx,
+            ty,
+        }
+    }
+
+    fn motion_text_key(
+        layer: &RenderPaintLayer,
+        phase: PaintLayerSubpixelPhase,
+    ) -> PaintLayerMovingPayloadKey {
+        let run = layer.own_runs()[0];
+        PaintLayerMovingPayloadKey::from_layer_run_with_subpixel_phase(
+            layer, run, 1.0, 0, phase, 0.0, true,
+        )
+        .expect("text run has bounds")
+    }
+
+    #[test]
+    fn text_payload_follows_a_zoom_only_while_its_layer_moves() {
+        let moving = motion_text_layer("Preferences", true);
+        let resting = motion_text_layer("Preferences", false);
+        let run = moving.own_runs()[0];
+        let at = |layer: &RenderPaintLayer, transform| {
+            MovingLayerEligibility::root()
+                .entering_layer(layer)
+                .with_transform(transform)
+        };
+
+        assert_eq!(
+            text_payload_gpu_subpixel_phase(run, at(&moving, zoom(0.42, 103.7, 61.2)), true),
+            Ok(PaintLayerSubpixelPhase::default())
+        );
+        assert_eq!(
+            text_payload_gpu_subpixel_phase(run, at(&resting, zoom(0.42, 103.7, 61.2)), true),
+            Err(RendererCacheRejectionReason::UnsupportedTransform)
+        );
+        // The output rotation of a portrait panel stays allowed.
+        let rotated_zoom = Affine2 {
+            xx: 0.0,
+            yx: -0.42,
+            xy: 0.42,
+            yy: 0.0,
+            tx: 10.0,
+            ty: 1270.5,
+        };
+        assert_eq!(
+            text_payload_gpu_subpixel_phase(run, at(&moving, rotated_zoom), true),
+            Ok(PaintLayerSubpixelPhase::default())
+        );
+        let skew = Affine2 {
+            xx: 0.5,
+            yx: 0.2,
+            xy: 0.0,
+            yy: 0.5,
+            tx: 0.0,
+            ty: 0.0,
+        };
+        assert_eq!(
+            text_payload_gpu_subpixel_phase(run, at(&moving, skew), true),
+            Err(RendererCacheRejectionReason::UnsupportedTransform)
+        );
+        // Children of a moving layer inherit the motion.
+        let child = motion_text_layer("Wi-Fi", false);
+        let inherited = at(&moving, zoom(0.8, 0.0, 0.0)).entering_layer(&child);
+        assert_eq!(
+            text_payload_gpu_subpixel_phase(child.own_runs()[0], inherited, true),
+            Ok(PaintLayerSubpixelPhase::default())
+        );
+    }
+
+    #[test]
+    fn zoom_payload_is_reused_across_scales_and_at_rest() {
+        let moving = motion_text_layer("Preferences", true);
+        let run = moving.own_runs()[0];
+        let phase_at = |transform| {
+            text_payload_gpu_subpixel_phase(
+                run,
+                MovingLayerEligibility::root()
+                    .entering_layer(&moving)
+                    .with_transform(transform),
+                true,
+            )
+            .expect("zoom accepts text")
+        };
+        let early = motion_text_key(&moving, phase_at(zoom(0.09, 560.0, 300.0)));
+        let late = motion_text_key(&moving, phase_at(zoom(0.93, 12.4, 7.9)));
+        assert_eq!(early, late);
+
+        // At rest at scale one the exact path takes the same payload, so the text is sharp
+        // without another raster.
+        let resting = motion_text_layer("Preferences", false);
+        let rest_phase = text_payload_gpu_subpixel_phase(
+            resting.own_runs()[0],
+            MovingLayerEligibility::root()
+                .entering_layer(&resting)
+                .with_transform(zoom(1.0, 0.0, 0.0)),
+            true,
+        )
+        .expect("identity accepts text");
+        assert_eq!(motion_text_key(&resting, rest_phase), early);
+
+        // New content during the zoom needs a new payload.
+        let edited = motion_text_layer("Preferences 2", true);
+        assert_ne!(
+            motion_text_key(&edited, PaintLayerSubpixelPhase::default()),
+            early
+        );
     }
 
     #[test]

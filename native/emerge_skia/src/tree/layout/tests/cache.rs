@@ -5129,3 +5129,104 @@ fn render_text_colors(
         })
         .collect()
 }
+
+fn animation_layers(
+    nodes: &[crate::render_scene::RenderNode],
+) -> Vec<&crate::render_scene::RenderPaintLayer> {
+    use crate::render_scene::{PaintLayerReason, RenderNode, RenderPaintLayerContentNode};
+
+    fn content(
+        nodes: &[RenderPaintLayerContentNode],
+    ) -> Vec<&crate::render_scene::RenderPaintLayer> {
+        nodes
+            .iter()
+            .flat_map(|node| match node {
+                RenderPaintLayerContentNode::Own(run) => animation_layers(&run.nodes),
+                RenderPaintLayerContentNode::Child(layer) => std::iter::once(layer)
+                    .filter(|layer| layer.id.role == PaintLayerReason::Animation)
+                    .chain(content(&layer.content.nodes))
+                    .collect(),
+                RenderPaintLayerContentNode::ShadowPass { children }
+                | RenderPaintLayerContentNode::Clip { children, .. }
+                | RenderPaintLayerContentNode::RelaxedClip { children, .. }
+                | RenderPaintLayerContentNode::Transform { children, .. }
+                | RenderPaintLayerContentNode::Alpha { children, .. }
+                | RenderPaintLayerContentNode::ColorFilter { children, .. } => content(children),
+            })
+            .collect()
+    }
+
+    nodes
+        .iter()
+        .flat_map(|node| match node {
+            RenderNode::ShadowPass { children }
+            | RenderNode::Clip { children, .. }
+            | RenderNode::RelaxedClip { children, .. }
+            | RenderNode::Transform { children, .. }
+            | RenderNode::Alpha { children, .. }
+            | RenderNode::ColorFilter { children, .. } => animation_layers(children),
+            RenderNode::PaintLayer(layer) => std::iter::once(layer)
+                .filter(|layer| layer.id.role == PaintLayerReason::Animation)
+                .chain(content(&layer.content.nodes))
+                .collect(),
+            RenderNode::Primitive(_) => Vec::new(),
+        })
+        .collect()
+}
+
+#[test]
+fn zoom_animation_layer_is_in_motion_until_the_animation_completes() {
+    let zoom = AnimationSpec {
+        keyframes: vec![
+            Attrs {
+                scale: Some(0.5),
+                ..Attrs::default()
+            },
+            Attrs {
+                scale: Some(1.0),
+                ..Attrs::default()
+            },
+        ],
+        duration_ms: 100.0,
+        curve: AnimationCurve::Linear,
+        repeat: AnimationRepeat::Once,
+    };
+    let mut tree = fragment_cache_cards_tree(3, 1, zoom);
+    let root_id = tree.root_id().unwrap();
+    let card_id = tree.child_ids(&root_id)[1];
+    let start = Instant::now();
+    let mut runtime = AnimationRuntime::default();
+    runtime.sync_with_tree(&tree, start);
+    let constraint = Constraint::new(800.0, 600.0);
+    let mut frame = |tree: &mut ElementTree, ms: u64| {
+        layout_or_refresh_default_with_animation(
+            tree,
+            constraint,
+            1.0,
+            &mut runtime,
+            start + Duration::from_millis(ms),
+        )
+        .unwrap()
+        .output
+        .scene
+    };
+    let motion = |scene: &crate::render_scene::RenderScene| {
+        animation_layers(&scene.nodes)
+            .iter()
+            .map(|layer| layer.in_motion)
+            .collect::<Vec<_>>()
+    };
+
+    frame(&mut tree, 0);
+    let moving = frame(&mut tree, 40);
+    assert!(tree.transform_in_motion(&card_id));
+    assert_eq!(motion(&moving), vec![true]);
+
+    let settled = [150, 200]
+        .into_iter()
+        .map(|ms| frame(&mut tree, ms))
+        .last()
+        .unwrap();
+    assert!(!tree.transform_in_motion(&card_id));
+    assert_eq!(motion(&settled), vec![false]);
+}

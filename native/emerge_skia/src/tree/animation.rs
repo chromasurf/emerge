@@ -151,6 +151,8 @@ pub struct AnimationOverlayResult {
     pub active: bool,
     pub invalidation: TreeInvalidation,
     pub effects: Vec<AnimationLayoutEffect>,
+    /// Elements whose transform-only animation is still running after this sample.
+    pub(crate) moving: Vec<NodeId>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -168,6 +170,9 @@ pub(crate) struct AnimationFrameSamples {
 impl AnimationOverlayResult {
     fn record_sample(&mut self, id: NodeId, sample: &AnimationSample) {
         self.active |= sample.active;
+        if sample.active && animation_attrs_are_transform_only(&sample.attrs) {
+            self.moving.push(id);
+        }
         if let Some(effect) = animation_attrs_layout_effect(id, &sample.attrs) {
             self.record_effect(effect);
         }
