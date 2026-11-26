@@ -61,6 +61,7 @@ pub(crate) fn spawn_tree_actor_with_initial_tree(
     initial_tree: ElementTree,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
+        super::raise_frame_thread_priority();
         let TreeActorConfig {
             render_sender,
             event_tx,

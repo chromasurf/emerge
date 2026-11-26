@@ -201,6 +201,7 @@ pub(crate) fn run(context: DrmRunContext, config: DrmRunConfig) {
 }
 
 fn run_presenter(context: DrmRunContext, config: DrmRunConfig) {
+    crate::runtime::raise_frame_thread_priority();
     match config.rendering_api {
         RenderingApi::Vulkan => {
             #[cfg(all(feature = "drm", feature = "vulkan"))]
