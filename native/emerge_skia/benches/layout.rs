@@ -1031,6 +1031,7 @@ fn print_showcase_paint_layers(nodes: &[emerge_skia::render_scene::RenderNode], 
             | emerge_skia::render_scene::RenderNode::RelaxedClip { children, .. }
             | emerge_skia::render_scene::RenderNode::Transform { children, .. }
             | emerge_skia::render_scene::RenderNode::Alpha { children, .. }
+            | emerge_skia::render_scene::RenderNode::ColorFilter { children, .. }
             | emerge_skia::render_scene::RenderNode::ShadowPass { children } => {
                 print_showcase_paint_layers(children, depth);
             }
@@ -1082,9 +1083,11 @@ fn print_showcase_paint_layer_content(
             | emerge_skia::render_scene::RenderPaintLayerContentNode::Transform {
                 children, ..
             }
-            | emerge_skia::render_scene::RenderPaintLayerContentNode::Alpha { children, .. } => {
-                print_showcase_paint_layer_content(children, depth)
-            }
+            | emerge_skia::render_scene::RenderPaintLayerContentNode::Alpha { children, .. }
+            | emerge_skia::render_scene::RenderPaintLayerContentNode::ColorFilter {
+                children,
+                ..
+            } => print_showcase_paint_layer_content(children, depth),
         }
     }
 }
