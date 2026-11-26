@@ -474,6 +474,10 @@ defmodule Emerge.UI do
   Submit frames with `Emerge.submit_video_frame/3`. The element has no intrinsic
   size; normal layout attrs determine its bounds and the latest frame is fitted
   within them.
+
+  The same target can appear in several video elements, for example clipped or
+  tinted with `Transform.color_matrix/1` for a wipe. The renderer draws each of them
+  from the one imported frame of the target; the frame is not copied per element.
   """
   @spec video(attrs(), video_target()) :: t()
   def video(attrs, target) do
