@@ -4798,3 +4798,334 @@ fn inline_decoration_animation_matches_fresh_frames_and_only_width_reflows() {
         );
     }
 }
+
+fn rgba(r: u8, g: u8, b: u8) -> Color {
+    Color::Rgba { r, g, b, a: 255 }
+}
+
+fn looping_spec(from: Attrs, to: Attrs) -> AnimationSpec {
+    AnimationSpec {
+        keyframes: vec![from, to],
+        duration_ms: 400.0,
+        curve: AnimationCurve::Linear,
+        repeat: AnimationRepeat::Loop,
+    }
+}
+
+/// A column of fixed-size cards, each holding a clickable text. The card at
+/// `animated` carries `animate`.
+fn fragment_cache_cards_tree(count: usize, animated: usize, animate: AnimationSpec) -> ElementTree {
+    fragment_cache_cards_tree_with_root(Attrs::default(), count, animated, animate)
+}
+
+fn fragment_cache_cards_tree_with_root(
+    root_attrs: Attrs,
+    count: usize,
+    animated: usize,
+    animate: AnimationSpec,
+) -> ElementTree {
+    let mut tree = ElementTree::new();
+    let root = make_element(
+        "cards_root",
+        ElementKind::Column,
+        Attrs {
+            font_color: Some(rgba(20, 20, 20)),
+            ..root_attrs
+        },
+    );
+    let root_id = root.id;
+    tree.set_root_id(root_id);
+    tree.insert(root);
+
+    let card_ids = (0..count)
+        .map(|index| {
+            let card = make_element(
+                &format!("card_{index}"),
+                ElementKind::El,
+                Attrs {
+                    background: Some(Background::Color(rgba(200, 210, index as u8))),
+                    animate: (index == animated).then(|| animate.clone()),
+                    ..fixed_box_attrs(220.0, 40.0)
+                },
+            );
+            let text = make_element(
+                &format!("card_text_{index}"),
+                ElementKind::Text,
+                Attrs {
+                    on_click: Some(true),
+                    ..text_attrs(&format!("Card {index}"))
+                },
+            );
+            let (card_id, text_id) = (card.id, text.id);
+            tree.insert(card);
+            tree.insert(text);
+            tree.set_children(&card_id, vec![text_id]).unwrap();
+            card_id
+        })
+        .collect();
+    tree.set_children(&root_id, card_ids).unwrap();
+    tree
+}
+
+fn uncached_render_scene(tree: &ElementTree) -> crate::render_scene::RenderScene {
+    let reference = tree.clone();
+    reference.iter_nodes().for_each(|element| {
+        element.refresh.render_fragment_cache.borrow_mut().take();
+    });
+    render_tree_scene(&reference).scene
+}
+
+/// Runs animation frames and checks each against an uncached render and a
+/// standalone registry build; returns the element visits of the last frame.
+fn run_cached_animation_frames(tree: &mut ElementTree, frames: u64) -> u64 {
+    let start = Instant::now();
+    let mut runtime = AnimationRuntime::default();
+    runtime.sync_with_tree(tree, start);
+    let constraint = Constraint::new(800.0, 600.0);
+    let initial =
+        layout_or_refresh_default_with_animation(tree, constraint, 1.0, &mut runtime, start)
+            .unwrap();
+    assert!(initial.layout_performed);
+
+    (1..=frames).fold(0, |_, frame| {
+        crate::tree::render::reset_render_traversal_diagnostics_for_benchmark();
+        let update = layout_or_refresh_default_with_animation(
+            tree,
+            constraint,
+            1.0,
+            &mut runtime,
+            start + Duration::from_millis(frame * 16),
+        )
+        .unwrap();
+        let visits =
+            crate::tree::render::take_render_traversal_diagnostics_for_benchmark().element_visits;
+
+        assert!(update.output.animations_active);
+        assert!(!update.layout_performed);
+        assert_render_scenes_equivalent(
+            scene_without_moving_paint_layers(update.output.scene),
+            scene_without_moving_paint_layers(uncached_render_scene(tree)),
+        );
+        assert_registry_rebuild_payloads_equivalent(
+            &update.output.event_rebuild,
+            &build_registry_rebuild(tree),
+        );
+        visits
+    })
+}
+
+#[test]
+fn paint_animation_reuses_clean_sibling_fragments() {
+    let animate = looping_spec(
+        Attrs {
+            background: Some(Background::Color(rgba(255, 0, 0))),
+            ..Attrs::default()
+        },
+        Attrs {
+            background: Some(Background::Color(rgba(0, 0, 255))),
+            ..Attrs::default()
+        },
+    );
+    let mut tree = fragment_cache_cards_tree(12, 3, animate);
+
+    let visits = run_cached_animation_frames(&mut tree, 4);
+
+    // Root and the animated card; its text and the other cards come from cache.
+    assert_eq!(visits, 2);
+}
+
+#[test]
+fn transform_animation_reuses_fragments_below_the_moving_element() {
+    let animate = looping_spec(
+        Attrs {
+            move_x: Some(0.0),
+            move_y: Some(0.0),
+            scale: Some(1.0),
+            alpha: Some(1.0),
+            ..Attrs::default()
+        },
+        Attrs {
+            move_x: Some(60.0),
+            move_y: Some(-20.0),
+            scale: Some(1.4),
+            alpha: Some(0.4),
+            ..Attrs::default()
+        },
+    );
+    let mut tree = fragment_cache_cards_tree(12, 5, animate);
+
+    // Each frame also checks that the registry, rebuilt for the moving
+    // element, matches a standalone build, so hit regions follow the move.
+    let visits = run_cached_animation_frames(&mut tree, 4);
+
+    assert_eq!(visits, 2);
+}
+
+#[test]
+fn rotating_ancestor_keeps_descendant_culling_exact() {
+    let animate = looping_spec(
+        Attrs {
+            rotate: Some(0.0),
+            ..Attrs::default()
+        },
+        Attrs {
+            rotate: Some(90.0),
+            ..Attrs::default()
+        },
+    );
+    let mut tree = fragment_cache_cards_tree(4, 1, animate);
+
+    let visits = run_cached_animation_frames(&mut tree, 4);
+
+    // A rotation enters the descendants' cache key, so the text rebuilds.
+    assert_eq!(visits, 3);
+}
+
+#[test]
+fn scrolling_a_repainting_container_rebuilds_its_cached_children() {
+    let background = |color| Attrs {
+        background: Some(Background::Color(color)),
+        ..Attrs::default()
+    };
+    let mut tree = fragment_cache_cards_tree_with_root(
+        Attrs {
+            scrollbar_y: Some(true),
+            height: Some(Length::Px(120.0)),
+            animate: Some(looping_spec(
+                background(rgba(255, 0, 0)),
+                background(rgba(0, 0, 255)),
+            )),
+            ..Attrs::default()
+        },
+        8,
+        usize::MAX,
+        looping_spec(Attrs::default(), Attrs::default()),
+    );
+    let root_id = tree.root_id().unwrap();
+    let start = Instant::now();
+    let mut runtime = AnimationRuntime::default();
+    runtime.sync_with_tree(&tree, start);
+    let constraint = Constraint::new(800.0, 600.0);
+    let mut frame = |tree: &mut ElementTree, index: u64| {
+        crate::tree::render::reset_render_traversal_diagnostics_for_benchmark();
+        let update = layout_or_refresh_default_with_animation(
+            tree,
+            constraint,
+            1.0,
+            &mut runtime,
+            start + Duration::from_millis(index * 16),
+        )
+        .unwrap();
+        let visits =
+            crate::tree::render::take_render_traversal_diagnostics_for_benchmark().element_visits;
+        assert_render_scenes_equivalent(
+            scene_without_moving_paint_layers(update.output.scene),
+            scene_without_moving_paint_layers(uncached_render_scene(tree)),
+        );
+        visits
+    };
+    let warm_visits = (0..=3).map(|index| frame(&mut tree, index)).last().unwrap();
+    assert_eq!(warm_visits, 1);
+
+    assert!(tree.apply_scroll(&root_id, 0.0, -30.0).is_dirty());
+    let scrolled_visits = frame(&mut tree, 4);
+
+    assert!(scrolled_visits > warm_visits, "{scrolled_visits}");
+}
+
+#[test]
+fn ancestor_font_color_change_rerenders_cached_descendant_text() {
+    let animate = looping_spec(
+        Attrs {
+            background: Some(Background::Color(rgba(255, 0, 0))),
+            ..Attrs::default()
+        },
+        Attrs {
+            background: Some(Background::Color(rgba(0, 0, 255))),
+            ..Attrs::default()
+        },
+    );
+    let mut tree = fragment_cache_cards_tree(3, 1, animate);
+    let root_id = tree.root_id().unwrap();
+    let start = Instant::now();
+    let mut runtime = AnimationRuntime::default();
+    runtime.sync_with_tree(&tree, start);
+    let constraint = Constraint::new(800.0, 600.0);
+    let frame = |tree: &mut ElementTree, runtime: &mut AnimationRuntime, index: u64| {
+        layout_or_refresh_default_with_animation(
+            tree,
+            constraint,
+            1.0,
+            runtime,
+            start + Duration::from_millis(index * 16),
+        )
+        .unwrap()
+    };
+    // The animation keeps the root damaged, so its cards store fragments.
+    (0..=3).for_each(|index| {
+        frame(&mut tree, &mut runtime, index);
+    });
+
+    let invalidation = apply_patches(
+        &mut tree,
+        vec![Patch::SetAttrs {
+            id: root_id,
+            attrs_raw: vec![0, 1, 17, 0, 255, 0, 0],
+        }],
+    )
+    .unwrap();
+    assert_eq!(invalidation, TreeInvalidation::Paint);
+    let output = frame(&mut tree, &mut runtime, 4).output;
+
+    let text_colors = render_text_colors(&output.scene.nodes);
+    assert_eq!(text_colors.len(), 3);
+    assert!(
+        text_colors
+            .iter()
+            .all(|color| *color == crate::render_color::RenderColor::Solid(0xff0000ff)),
+        "{text_colors:?}"
+    );
+    assert_render_scenes_equivalent(
+        scene_without_moving_paint_layers(output.scene),
+        scene_without_moving_paint_layers(uncached_render_scene(&tree)),
+    );
+}
+
+fn render_text_colors(
+    nodes: &[crate::render_scene::RenderNode],
+) -> Vec<crate::render_color::RenderColor> {
+    use crate::render_scene::{DrawPrimitive, RenderNode, RenderPaintLayerContentNode};
+
+    fn content(nodes: &[RenderPaintLayerContentNode]) -> Vec<crate::render_color::RenderColor> {
+        nodes
+            .iter()
+            .flat_map(|node| match node {
+                RenderPaintLayerContentNode::Own(run) => render_text_colors(&run.nodes),
+                RenderPaintLayerContentNode::Child(layer) => content(&layer.content.nodes),
+                RenderPaintLayerContentNode::ShadowPass { children }
+                | RenderPaintLayerContentNode::Clip { children, .. }
+                | RenderPaintLayerContentNode::RelaxedClip { children, .. }
+                | RenderPaintLayerContentNode::Transform { children, .. }
+                | RenderPaintLayerContentNode::Alpha { children, .. }
+                | RenderPaintLayerContentNode::ColorFilter { children, .. } => content(children),
+            })
+            .collect()
+    }
+
+    nodes
+        .iter()
+        .flat_map(|node| match node {
+            RenderNode::ShadowPass { children }
+            | RenderNode::Clip { children, .. }
+            | RenderNode::RelaxedClip { children, .. }
+            | RenderNode::Transform { children, .. }
+            | RenderNode::Alpha { children, .. }
+            | RenderNode::ColorFilter { children, .. } => render_text_colors(children),
+            RenderNode::PaintLayer(layer) => content(&layer.content.nodes),
+            RenderNode::Primitive(DrawPrimitive::TextWithFont(_, _, _, _, color, _, _, _)) => {
+                vec![color.clone()]
+            }
+            RenderNode::Primitive(_) => Vec::new(),
+        })
+        .collect()
+}

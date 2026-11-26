@@ -648,6 +648,9 @@ pub struct RenderFragmentCache {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderFragmentCacheKind {
     Nearby,
+    Child,
+    /// A child key seen once; its nodes are stored when the key repeats.
+    ChildPending,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
