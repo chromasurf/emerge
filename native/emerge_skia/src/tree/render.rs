@@ -45,8 +45,9 @@ use crate::render_scene::{
 use crate::renderer::{make_font_with_style, measure_text_visual_metrics_with_font};
 #[cfg(any(test, feature = "bench-diagnostics"))]
 use std::cell::Cell;
+use std::cell::OnceCell;
 use std::collections::hash_map::DefaultHasher;
-use std::hash::Hasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[cfg(any(test, feature = "bench-diagnostics"))]
@@ -363,6 +364,7 @@ struct HostContentBuild<'a> {
     render_frame: Frame,
     element_context: &'a FontContext,
     scene_state: Option<ResolvedNodeState>,
+    cache_child_fragments: bool,
 }
 
 #[derive(Clone, Default)]
@@ -623,6 +625,12 @@ fn build_element_subtree<R: RegistryTraversalSink>(
             render_frame,
             element_context: &element_context,
             scene_state: scene_state.clone(),
+            // Children of a host that repaints, moves or fades reuse their
+            // fragments; deeper clean levels sit inside those fragments.
+            cache_child_fragments: has_render_damage(element)
+                || declared_animation
+                || !transform.is_identity()
+                || alpha != 1.0,
         },
         &mut outputs.reborrow(),
         traversal.for_host_content(
@@ -1085,6 +1093,7 @@ fn build_host_content_subtree<H: HostRegistryTraversalSink>(
         render_frame,
         element_context,
         scene_state,
+        cache_child_fragments,
     } = input;
 
     let attrs = &element.layout.effective;
@@ -1130,6 +1139,10 @@ fn build_host_content_subtree<H: HostRegistryTraversalSink>(
         }
     } else {
         let child_scene_ctx = children_scene_context(scene_state.as_ref());
+        let children_fragment_context = OnceCell::new();
+        let children_fragment_context = (cache_child_fragments
+            && culling_survives_transform(child_scene_ctx.interaction_transform))
+        .then_some(&children_fragment_context);
         element.for_each_retained_local_branch(tree, |branch| match branch {
             RetainedLocalBranchRef::Nearby(mount) => {
                 let branch_registry = registry.local_nearby_traversal(scene_state.as_ref());
@@ -1176,10 +1189,13 @@ fn build_host_content_subtree<H: HostRegistryTraversalSink>(
                 } else {
                     child_traversal
                 };
-                let branch_subtree = build_element_subtree(
+                let branch_subtree = build_cached_child_subtree(
                     tree,
-                    child.ix,
-                    element_context,
+                    CachedChild {
+                        ix: child.ix,
+                        inherited: element_context,
+                        siblings_context: children_fragment_context,
+                    },
                     &mut outputs.reborrow(),
                     child_traversal,
                     branch_registry,
@@ -1303,24 +1319,11 @@ fn build_nearby_mount_subtree<R: RegistryTraversalSink>(
             traversal.render_ctx,
         )
     });
-    if let Some(cache_key) = cache_key
-        && let Some(cached) = tree
-            .get_ix(nearby_ix)
-            .filter(|element| {
-                !(element.refresh.render_dirty || element.refresh.render_descendant_dirty)
-            })
-            .and_then(|element| {
-                element
-                    .refresh
-                    .render_fragment_cache
-                    .borrow()
-                    .as_ref()
-                    .filter(|cache| cache.key == cache_key)
-                    .cloned()
-            })
-    {
+    if let Some(subtree) = cache_key.and_then(|key| {
+        tree.get_ix(nearby_ix)
+            .and_then(|element| cached_render_fragment(element, key))
+    }) {
         registry.collect_registry_for_render_skipped_subtree(tree, nearby_ix);
-        let subtree = RenderSubtree::from_fragment_cache(&cached);
         apply_subtree_outputs(outputs, &subtree);
         return subtree;
     }
@@ -1352,6 +1355,197 @@ fn build_nearby_mount_subtree<R: RegistryTraversalSink>(
             .replace(subtree.to_fragment_cache(cache_key));
     }
     subtree
+}
+
+struct CachedChild<'a> {
+    ix: NodeIx,
+    inherited: &'a FontContext,
+    /// Context hash shared by all children of one host, computed on first use;
+    /// `None` builds without the cache.
+    siblings_context: Option<&'a OnceCell<u64>>,
+}
+
+/// Builds a child subtree, reusing its last fragment while the child has no
+/// render damage and its build inputs match the cache key.
+fn build_cached_child_subtree<R: RegistryTraversalSink>(
+    tree: &ElementTree,
+    child: CachedChild<'_>,
+    outputs: &mut RenderOutputs<'_>,
+    traversal: RenderTraversal<'_>,
+    mut registry: R,
+) -> RenderSubtree {
+    let CachedChild {
+        ix,
+        inherited,
+        siblings_context,
+    } = child;
+    let Some(element) = tree.get_ix(ix) else {
+        return RenderSubtree::default();
+    };
+    let cache_key = siblings_context
+        .filter(|_| !has_render_damage(element))
+        .and_then(|siblings_context| {
+            let context = *siblings_context
+                .get_or_init(|| child_render_fragment_context_key(inherited, &traversal));
+            child_render_fragment_cache_key(tree, ix, element, &traversal, context)
+        });
+    if let Some(subtree) = cache_key.and_then(|key| cached_render_fragment(element, key)) {
+        registry.collect_registry_for_render_skipped_subtree(tree, ix);
+        apply_subtree_outputs(outputs, &subtree);
+        return subtree;
+    }
+
+    let subtree = build_element_subtree(tree, ix, inherited, outputs, traversal, registry);
+    if let Some(cache_key) = cache_key {
+        store_child_render_fragment(element, cache_key, &subtree);
+    }
+    subtree
+}
+
+/// Stores the nodes only when the key repeats from the previous build. Keys
+/// that change every frame (scrolled content, rotating ancestors, the moving
+/// element itself) keep a pending entry and never clone nodes.
+fn store_child_render_fragment(
+    element: &Element,
+    key: RenderFragmentCacheKey,
+    subtree: &RenderSubtree,
+) {
+    let pending_key = RenderFragmentCacheKey {
+        kind: RenderFragmentCacheKind::ChildPending,
+        ..key
+    };
+    let mut cache = element.refresh.render_fragment_cache.borrow_mut();
+    let repeated = cache.as_ref().is_some_and(|cache| cache.key == pending_key);
+    *cache = Some(
+        if repeated && render_subtree_has_cacheable_fragment(subtree) {
+            subtree.to_fragment_cache(key)
+        } else {
+            RenderSubtree::default().to_fragment_cache(pending_key)
+        },
+    );
+}
+
+fn has_render_damage(element: &Element) -> bool {
+    element.refresh.render_dirty || element.refresh.render_descendant_dirty
+}
+
+fn cached_render_fragment(element: &Element, key: RenderFragmentCacheKey) -> Option<RenderSubtree> {
+    if has_render_damage(element) {
+        return None;
+    }
+    element
+        .refresh
+        .render_fragment_cache
+        .borrow()
+        .as_ref()
+        .filter(|cache| cache.key == key)
+        .map(RenderSubtree::from_fragment_cache)
+}
+
+fn child_render_fragment_cache_key(
+    tree: &ElementTree,
+    ix: NodeIx,
+    element: &Element,
+    traversal: &RenderTraversal<'_>,
+    siblings_context: u64,
+) -> Option<RenderFragmentCacheKey> {
+    let frame = element.layout.frame?;
+    let scene_ctx = &traversal.scene_ctx;
+    let raw_render_frame = element.layout.render_frame.unwrap_or(frame);
+    let render_frame = Frame {
+        x: raw_render_frame.x - scene_ctx.scroll_dx,
+        y: raw_render_frame.y - scene_ctx.scroll_dy,
+        ..raw_render_frame
+    };
+
+    Some(RenderFragmentCacheKey {
+        kind: RenderFragmentCacheKind::Child,
+        paint_generation: element.refresh.paint_generation,
+        topology: tree.topology_dependency_key_ix(ix),
+        bounds: Rect::from_frame(render_frame),
+        // Slider value slots differ from their siblings only in this flag.
+        context: siblings_context ^ u64::from(traversal.inside_cacheable_semantic_layer),
+    })
+}
+
+/// Hashes every traversal input a child subtree's render nodes depend on,
+/// except the per-child semantic layer flag. Interaction clips feed only the
+/// registry and stay out of the key.
+fn child_render_fragment_context_key(
+    inherited: &FontContext,
+    traversal: &RenderTraversal<'_>,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    let scene_ctx = &traversal.scene_ctx;
+    let render_ctx = traversal.render_ctx;
+    hash_f32_bits(&mut hasher, scene_ctx.scroll_dx);
+    hash_f32_bits(&mut hasher, scene_ctx.scroll_dy);
+    [scene_ctx.visible_clip, scene_ctx.nearby_visible_clip]
+        .iter()
+        .for_each(|clip| hash_optional_clip_shape(&mut hasher, *clip));
+    hasher.write_u8(scene_ctx.front_nearby_subtree as u8);
+    hasher.write_u8(scene_ctx.front_nearby_root as u8);
+    hasher.write_u8(traversal.disable_viewport_culling as u8);
+    hash_rect_bits(&mut hasher, render_ctx.scene_bounds);
+    [
+        &render_ctx.inherited_host_clips,
+        &render_ctx.nearby_host_clips,
+    ]
+    .iter()
+    .for_each(|clips| {
+        hasher.write_usize(clips.len());
+        clips.iter().for_each(|clip| {
+            hash_clip_shape(&mut hasher, &clip.clip);
+            hasher.write_u8(clip.scroll_x as u8);
+            hasher.write_u8(clip.scroll_y as u8);
+        });
+    });
+    [
+        &render_ctx.inherited_self_clips,
+        &render_ctx.nearby_self_clips,
+    ]
+    .iter()
+    .for_each(|clips| {
+        hasher.write_usize(clips.len());
+        clips
+            .iter()
+            .for_each(|clip| hash_clip_shape(&mut hasher, clip));
+    });
+    hash_font_context(&mut hasher, inherited);
+    hasher.finish()
+}
+
+/// Viewport culling maps the bounds and the clip through the same inherited
+/// transform. An axis-aligned, non-degenerate transform keeps every overlap
+/// decision, so the fragment key can leave the transform out.
+fn culling_survives_transform(transform: Affine2) -> bool {
+    transform.yx == 0.0 && transform.xy == 0.0 && transform.xx != 0.0 && transform.yy != 0.0
+}
+
+fn hash_optional_clip_shape(hasher: &mut DefaultHasher, clip: Option<ClipShape>) {
+    match clip {
+        Some(clip) => {
+            hasher.write_u8(1);
+            hash_clip_shape(hasher, &clip);
+        }
+        None => hasher.write_u8(0),
+    }
+}
+
+fn hash_font_context(hasher: &mut DefaultHasher, font: &FontContext) {
+    font.font_family.hash(hasher);
+    font.font_weight.hash(hasher);
+    font.font_italic.hash(hasher);
+    font.font_size.map(f32::to_bits).hash(hasher);
+    font.font_color.hash(hasher);
+    font.font_underline.hash(hasher);
+    font.font_strike.hash(hasher);
+    font.font_letter_spacing.map(f32::to_bits).hash(hasher);
+    font.font_word_spacing.map(f32::to_bits).hash(hasher);
+    font.text_align
+        .as_ref()
+        .map(std::mem::discriminant)
+        .hash(hasher);
 }
 
 fn render_subtree_has_cacheable_fragment(subtree: &RenderSubtree) -> bool {
