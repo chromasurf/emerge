@@ -1,12 +1,16 @@
 //! The startup acknowledgement means resources are prepared, not visible.
+//! The first frame waits up to `IMAGE_GRACE` for the images it shows, so a boot splash on the
+//! display is not replaced by a frame whose images are still decoding.
 //! A replay barrier prevents a recreated presenter from selecting a queued scene
 //! from its previous layout/session; only an explicit application upload is valid.
 use crate::{actors::RenderMsg, renderer::RenderState};
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use std::{
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+const IMAGE_GRACE: Duration = Duration::from_millis(600);
 
 pub(super) fn wait_for_frame(
     render_rx: &Receiver<RenderMsg>,
@@ -23,11 +27,48 @@ pub(super) fn wait_for_frame(
             }
             Ok(message) => {
                 if let Some(state) = application_frame(message, request) {
-                    return Ok(state);
+                    return with_images(render_rx, stop, request, state);
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}
         }
+    }
+}
+
+// While images of the first frame load, later scenes replace it; the asset worker's update brings
+// the scene with the images. After IMAGE_GRACE the latest scene shows as it is.
+fn with_images(
+    render_rx: &Receiver<RenderMsg>,
+    stop: &AtomicBool,
+    request: u64,
+    mut state: RenderState,
+) -> Result<RenderState, String> {
+    let deadline = Instant::now() + IMAGE_GRACE;
+
+    while crate::assets::pending_image_count() > 0 && !stop.load(Ordering::Acquire) {
+        let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+            break;
+        };
+        match render_rx.recv_timeout(left) {
+            Ok(RenderMsg::Stop) | Err(RecvTimeoutError::Disconnected) => {
+                return Err("DRM render channel stopped before its first application frame".into());
+            }
+            Ok(message) => {
+                if let Some(next) = later_frame(message, request) {
+                    state = next;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => break,
+        }
+    }
+
+    Ok(state)
+}
+
+fn later_frame(message: RenderMsg, request: u64) -> Option<RenderState> {
+    match message {
+        RenderMsg::Scene { frame_request, .. } if frame_request >= request => scene_state(message),
+        _ => None,
     }
 }
 
@@ -36,6 +77,15 @@ fn application_frame(message: RenderMsg, request: u64) -> Option<RenderState> {
         RenderMsg::Scene {
             application_frame: true,
             frame_request,
+            ..
+        } if frame_request == request => scene_state(message),
+        _ => None,
+    }
+}
+
+fn scene_state(message: RenderMsg) -> Option<RenderState> {
+    match message {
+        RenderMsg::Scene {
             scene,
             version,
             animate,
@@ -43,7 +93,7 @@ fn application_frame(message: RenderMsg, request: u64) -> Option<RenderState> {
             pipeline_submitted_at,
             pipeline_render_queued_at,
             ..
-        } if frame_request == request => {
+        } => {
             let mut state = RenderState::default();
             state.set_scene(*scene);
             state.render_version = version;

@@ -353,6 +353,15 @@ thread_local! {
     static TEST_ASSET_CONTEXT: AssetContext = AssetContext::default();
 }
 
+/// Images of the current renderer still loading; 0 on a thread without an asset context.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn pending_image_count() -> usize {
+    CURRENT_ASSET_CONTEXT
+        .with(|current| current.borrow().clone())
+        .and_then(|context| context.state.lock().ok().map(|state| state.pending_count))
+        .unwrap_or(0)
+}
+
 pub(crate) fn current_context() -> AssetContext {
     CURRENT_ASSET_CONTEXT
         .with(|current| current.borrow().clone())
