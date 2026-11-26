@@ -714,7 +714,12 @@ fn build_element_subtree<R: RegistryTraversalSink>(
 
     let local_effects = wrap_with_effects(local, alpha, attrs.color_matrix);
     if declared_animation && !local_effects.is_empty() {
-        local = wrap_with_compositor_animation_layer(local_effects, element, render_frame);
+        local = wrap_with_compositor_animation_layer(
+            local_effects,
+            element,
+            render_frame,
+            tree.transform_in_motion(&element.id),
+        );
     } else {
         local = local_effects;
     }
@@ -2061,6 +2066,7 @@ fn wrap_with_compositor_animation_layer(
     nodes: Vec<RenderNode>,
     element: &Element,
     render_frame: Frame,
+    in_motion: bool,
 ) -> Vec<RenderNode> {
     let nominal_bounds = Rect::from_frame(render_frame);
     let visual_bounds = paint_layer_own_content_visual_bounds(&nodes);
@@ -2079,7 +2085,8 @@ fn wrap_with_compositor_animation_layer(
                 visual_bounds,
             },
             content,
-        ),
+        )
+        .with_motion(in_motion),
     )]
 }
 

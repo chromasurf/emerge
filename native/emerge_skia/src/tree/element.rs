@@ -1279,6 +1279,10 @@ pub struct ElementTree {
     /// Last layout scale applied to the tree.
     pub current_scale: f32,
 
+    /// Elements whose transform-only animation was still running at the latest sampled frame.
+    /// Their compositor layers may draw text from unscaled payloads while the transform moves.
+    transform_motion: std::collections::HashSet<NodeId>,
+
     /// Root element index (if tree is non-empty).
     root: Option<NodeIx>,
 
@@ -1339,6 +1343,7 @@ impl Default for ElementTree {
             revision: 0,
             next_ghost_seq: 0,
             current_scale: 1.0,
+            transform_motion: Default::default(),
             root: None,
             nodes: Vec::new(),
             id_to_ix: HashMap::new(),
@@ -1419,6 +1424,15 @@ impl ElementTree {
             work.drop_time += elapsed;
             work.last = stats;
         }
+    }
+
+    /// Replaces the elements in motion with those of the latest sampled animation frame.
+    pub(crate) fn set_transform_motion(&mut self, ids: impl IntoIterator<Item = NodeId>) {
+        self.transform_motion = ids.into_iter().collect();
+    }
+
+    pub(crate) fn transform_in_motion(&self, id: &NodeId) -> bool {
+        self.transform_motion.contains(id)
     }
 
     /// Cache declared/interaction references across animation ticks. Asset facts

@@ -403,6 +403,9 @@ pub struct RenderPaintLayer {
     pub content_generation: u64,
     pub content: Arc<RenderPaintLayerContent>,
     pub metrics: RenderPaintLayerMetrics,
+    /// The layer's transform animates. Text payloads below it keep their unscaled raster and
+    /// follow a scale of the transform until the motion ends.
+    pub in_motion: bool,
 }
 
 impl RenderPaintLayer {
@@ -447,7 +450,12 @@ impl RenderPaintLayer {
             content_generation: parts.content_generation,
             content: Arc::new(content),
             metrics,
+            in_motion: false,
         }
+    }
+
+    pub(crate) fn with_motion(self, in_motion: bool) -> Self {
+        Self { in_motion, ..self }
     }
 
     pub(crate) fn content_nodes(&self) -> Vec<RenderNode> {
@@ -459,7 +467,7 @@ impl RenderPaintLayer {
     }
 
     pub(crate) fn with_bounds_and_children(&self, bounds: Rect, children: Vec<RenderNode>) -> Self {
-        Self::from_prepared_children(
+        let layer = Self::from_prepared_children(
             RenderPaintLayerBuildParts {
                 id: self.id,
                 bounds,
@@ -469,7 +477,8 @@ impl RenderPaintLayer {
                 visual_bounds: None,
             },
             RenderPaintLayerContent::from_composition_nodes(children),
-        )
+        );
+        layer.with_motion(self.in_motion)
     }
 
     pub(crate) fn child_layer_count(&self) -> usize {
@@ -1503,6 +1512,7 @@ pub(crate) fn hash_paint_layer_metadata<H: Hasher>(hasher: &mut H, layer: &Rende
     layer.placement.hash(hasher);
     layer.policy.hash(hasher);
     layer.content_generation.hash(hasher);
+    layer.in_motion.hash(hasher);
 }
 
 pub(crate) fn hash_paint_layer_clip_shapes<H: Hasher>(

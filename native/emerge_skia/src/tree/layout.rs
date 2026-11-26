@@ -800,6 +800,7 @@ impl FrameAttrsPreparation {
                 prepare_all_attrs_for_frame(tree, scale, &self.payload.samples.samples);
                 apply_interaction_styles(tree);
             }
+            tree.set_transform_motion(self.animation_result.moving.iter().copied());
             mark_animation_refresh_effects_dirty(tree, &self.animation_result);
             self.token.applied(tree);
             Ok(AppliedFrameAttrs {
