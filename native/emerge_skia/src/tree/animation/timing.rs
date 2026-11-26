@@ -107,7 +107,17 @@ pub(super) fn apply_curve(curve: &AnimationCurve, t: f64) -> f64 {
         AnimationCurve::EaseOut => 1.0 - (1.0 - t).powi(3),
         AnimationCurve::EaseInOut if t < 0.5 => 4.0 * t * t * t,
         AnimationCurve::EaseInOut => 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0,
+        AnimationCurve::EaseOutExpo => ease_out_expo(t),
         AnimationCurve::Spring => spring(t),
+    }
+}
+
+// 1 - 2^(-10t), reaching 1 at the end of the duration.
+fn ease_out_expo(t: f64) -> f64 {
+    if t >= 1.0 {
+        1.0
+    } else {
+        1.0 - 2f64.powf(-10.0 * t)
     }
 }
 
@@ -147,6 +157,9 @@ pub(crate) fn remaining_progress(curve: &AnimationCurve, anchor: f64, now: f64) 
         }
         AnimationCurve::EaseInOut => {
             4.0 * (t - a) * (t * t + t * a + a * a) / (1.0 - 4.0 * a.powi(3))
+        }
+        AnimationCurve::EaseOutExpo => {
+            (ease_out_expo(t) - ease_out_expo(a)) / (1.0 - ease_out_expo(a))
         }
         // The spring keeps its overshoot, so it returns before the clamp. From about 45 % on it is
         // at or past its target and starts again over the rest of the interval.
