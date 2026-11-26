@@ -844,6 +844,7 @@ fn prepare_frame_attrs_measured<M: TextMeasurer>(
     }
     let assets = tree.capture_frame_assets();
     let paint_dirty = assets.paint_invalidations(tree, tree.frame_assets.as_deref());
+    tree.clear_settled_image_fallbacks(&paint_dirty, |source| assets.settled(source));
     let _asset_guard = assets.enter();
     let fonts = measurer.font_snapshot();
     let _font_guard = fonts.as_ref().map(|fonts| fonts.enter());

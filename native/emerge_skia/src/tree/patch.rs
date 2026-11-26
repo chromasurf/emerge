@@ -13,8 +13,8 @@ use super::animation::{
     AnimationSpec, retarget_exit_animation_spec_to_current_visual, scale_animation_spec,
 };
 use super::attrs::{
-    AlignX, Attrs, BorderWidth, Length, Padding, decode_attrs, effective_scrollbar_x,
-    effective_scrollbar_y,
+    AlignX, Attrs, BorderWidth, ImageSource, Length, Padding, decode_attrs, effective_scrollbar_x,
+    effective_scrollbar_y, image_sources,
 };
 use super::deserialize::{DecodeError, decode_tree};
 #[cfg(test)]
@@ -883,6 +883,21 @@ fn attrs_equivalent_for_plain_text_paint(before: &Attrs, after: &Attrs) -> bool 
         && before.svg_expected == after.svg_expected
 }
 
+/// A changed image source keeps the previous one as its fallback; a removed source drops it and
+/// an unchanged one keeps the fallback it has.
+fn next_image_fallbacks(
+    before: &Attrs,
+    after: &Attrs,
+    current: &[Option<ImageSource>; 2],
+) -> [Option<ImageSource>; 2] {
+    let (before, after) = (image_sources(before), image_sources(after));
+    std::array::from_fn(|slot| match (before[slot], after[slot]) {
+        (_, None) => None,
+        (Some(old), Some(new)) if old != new => Some(old.clone()),
+        _ => current[slot].clone(),
+    })
+}
+
 fn text_paint_attrs_changed(before: &Attrs, after: &Attrs) -> bool {
     before.font_color != after.font_color
         || before.font_underline != after.font_underline
@@ -1066,6 +1081,11 @@ fn apply_patch(
                         super::layout::scale_attrs(&decoded, element.layout.dimension_facts.scale);
                 }
                 let before_attrs = std::mem::replace(&mut element.spec.declared, decoded);
+                element.runtime.image_fallbacks = next_image_fallbacks(
+                    &before_attrs,
+                    &element.spec.declared,
+                    &element.runtime.image_fallbacks,
+                );
                 element.normalize_extracted_state();
                 if slider_value_is_from_patch && !slider_value_is_runtime_owned {
                     element.runtime.slider_value_origin = SliderValueOrigin::TreePatch;
@@ -1717,6 +1737,7 @@ fn clone_as_ghost(
             mouse_down_active: false,
             focused_active: false,
             scrollbar_hover_axis: None,
+            image_fallbacks: old.runtime.image_fallbacks.clone(),
         },
         layout: crate::tree::element::NodeLayoutState {
             dimension_samples: super::layout::dimensions::capture_ghost_samples(tree, old, id_map),

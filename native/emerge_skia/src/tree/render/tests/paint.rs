@@ -2234,3 +2234,106 @@ fn multicolor_gradient_paints_middle_stop_and_keeps_clip_and_large_angle() {
         assert_eq!(gradient.clips.len(), 1);
     }
 }
+
+fn image_src_patch(source: &str) -> Vec<u8> {
+    let mut data = vec![0, 1, 53, 0];
+    data.extend_from_slice(&(source.len() as u16).to_be_bytes());
+    data.extend_from_slice(source.as_bytes());
+    data
+}
+
+fn drawn_image_ids(tree: &ElementTree) -> Vec<String> {
+    let scene = super::super::render_tree_scene_with_scroll_layers(tree).scene;
+    trace_scene(&scene)
+        .draws
+        .into_iter()
+        .filter_map(|draw| match draw.primitive {
+            DrawPrimitive::Image(_, _, _, _, asset_id, _, _) => Some(asset_id),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn changed_image_source_draws_the_previous_image_until_it_loads() {
+    let (old_id, new_id) = ("fallback_old_photo", "fallback_new_photo");
+    crate::renderer::insert_test_raster_asset_rgba(old_id, 1, 1, &[0, 255, 0, 255])
+        .expect("test asset should insert");
+    crate::assets::ensure_source(&ImageSource::Id(old_id.to_string()));
+
+    let id = NodeId::from_term_bytes(vec![91]);
+    let mut element = Element::with_attrs(
+        id,
+        ElementKind::Image,
+        Vec::new(),
+        Attrs {
+            image_src: Some(ImageSource::Id(old_id.to_string())),
+            image_fit: Some(ImageFit::Cover),
+            ..Attrs::default()
+        },
+    );
+    element.layout.frame = Some(Frame {
+        x: 0.0,
+        y: 0.0,
+        width: 40.0,
+        height: 40.0,
+        content_width: 40.0,
+        content_height: 40.0,
+    });
+    let mut tree = ElementTree::new();
+    tree.set_root_id(id);
+    tree.insert(element);
+    assert_eq!(drawn_image_ids(&tree), vec![old_id.to_string()]);
+
+    crate::tree::patch::apply_patches(
+        &mut tree,
+        vec![crate::tree::patch::Patch::SetAttrs {
+            id,
+            attrs_raw: image_src_patch(new_id),
+        }],
+    )
+    .expect("patch applies");
+    // The new image is still loading: the previous one stays instead of an empty frame.
+    assert_eq!(drawn_image_ids(&tree), vec![old_id.to_string()]);
+
+    crate::renderer::insert_test_raster_asset_rgba(new_id, 1, 1, &[0, 0, 255, 255])
+        .expect("test asset should insert");
+    crate::assets::ensure_source(&ImageSource::Id(new_id.to_string()));
+    assert_eq!(drawn_image_ids(&tree), vec![new_id.to_string()]);
+
+    tree.clear_settled_image_fallbacks(&[id], |source| {
+        matches!(
+            crate::assets::source_status(source),
+            Some(crate::assets::AssetStatus::Ready(_))
+        )
+    });
+    assert_eq!(tree.get(&id).unwrap().runtime.image_fallbacks, [None, None]);
+}
+
+#[test]
+fn image_without_a_previous_ready_source_draws_nothing_while_loading() {
+    let id = NodeId::from_term_bytes(vec![92]);
+    let mut element = Element::with_attrs(
+        id,
+        ElementKind::Image,
+        Vec::new(),
+        Attrs {
+            image_src: Some(ImageSource::Id("fallback_first_pending".to_string())),
+            ..Attrs::default()
+        },
+    );
+    element.layout.frame = Some(Frame {
+        x: 0.0,
+        y: 0.0,
+        width: 40.0,
+        height: 40.0,
+        content_width: 40.0,
+        content_height: 40.0,
+    });
+    element.runtime.image_fallbacks[0] = Some(ImageSource::Id("fallback_never_loaded".into()));
+    let mut tree = ElementTree::new();
+    tree.set_root_id(id);
+    tree.insert(element);
+
+    assert!(drawn_image_ids(&tree).is_empty());
+}

@@ -65,7 +65,11 @@ pub(super) fn collect_box_shadow_nodes(
         .collect()
 }
 
-pub(super) fn build_background_nodes(frame: Frame, attrs: &Attrs) -> Vec<RenderNode> {
+pub(super) fn build_background_nodes(
+    frame: Frame,
+    attrs: &Attrs,
+    fallback: Option<&ImageSource>,
+) -> Vec<RenderNode> {
     let Some(background) = &attrs.background else {
         return Vec::new();
     };
@@ -74,17 +78,26 @@ pub(super) fn build_background_nodes(frame: Frame, attrs: &Attrs) -> Vec<RenderN
         Background::Color(color) => {
             collect_background_rect_nodes(frame, color.render(Rect::from_frame(frame)))
         }
-        Background::Image { source, fit } => {
-            paint_node_for_image_source(Rect::from_frame(frame), source, *fit, None, false)
-                .into_iter()
-                .collect()
-        }
+        Background::Image { source, fit } => paint_node_for_image_source(
+            Rect::from_frame(frame),
+            source,
+            *fit,
+            None,
+            false,
+            fallback,
+        )
+        .into_iter()
+        .collect(),
     };
 
     wrap_with_self_clip(nodes, frame, attrs)
 }
 
-pub(super) fn render_image_nodes(frame: Frame, attrs: &Attrs) -> Vec<RenderNode> {
+pub(super) fn render_image_nodes(
+    frame: Frame,
+    attrs: &Attrs,
+    fallback: Option<&ImageSource>,
+) -> Vec<RenderNode> {
     let Some(source) = attrs.image_src.as_ref() else {
         return Vec::new();
     };
@@ -110,6 +123,7 @@ pub(super) fn render_image_nodes(frame: Frame, attrs: &Attrs) -> Vec<RenderNode>
             })
         }),
         attrs.svg_expected.unwrap_or(false),
+        fallback,
     )
     .into_iter()
     .collect()
@@ -137,12 +151,15 @@ pub(super) fn render_video_nodes(frame: Frame, attrs: &Attrs) -> Vec<RenderNode>
     ))]
 }
 
+/// Draws `source`; while it loads, the ready `fallback` the element showed before takes its
+/// place, so a changed image does not flash the background.
 fn paint_node_for_image_source(
     rect: Rect,
     source: &ImageSource,
     fit: ImageFit,
     svg_tint: Option<RenderColor>,
     svg_expected: bool,
+    fallback: Option<&ImageSource>,
 ) -> Option<RenderNode> {
     if rect.width <= 0.0 || rect.height <= 0.0 {
         return None;
@@ -150,7 +167,17 @@ fn paint_node_for_image_source(
 
     assets::ensure_source(source);
 
-    match assets::source_status(source) {
+    let current = assets::source_status(source);
+    let status = if matches!(current, Some(AssetStatus::Ready(_) | AssetStatus::Failed)) {
+        current
+    } else {
+        fallback
+            .and_then(assets::source_status)
+            .filter(|status| matches!(status, AssetStatus::Ready(_)))
+            .or(current)
+    };
+
+    match status {
         Some(AssetStatus::Ready(asset)) => {
             let asset_is_vector = matches!(
                 crate::renderer::asset_kind(&asset.id),

@@ -1068,6 +1068,15 @@ fn tree_source_refs(
                     .cloned()
                     .map(|source| (source, None)),
             )
+            .chain(
+                element
+                    .runtime
+                    .image_fallbacks
+                    .iter()
+                    .flatten()
+                    .cloned()
+                    .map(|source| (source, None)),
+            )
     })
 }
 #[derive(Clone, Debug)]
@@ -1639,6 +1648,13 @@ impl FrameAssets {
             })
             .map(|node| node.id)
             .collect()
+    }
+    /// The source has loaded or failed in this frame.
+    pub(crate) fn settled(&self, source: &ImageSource) -> bool {
+        matches!(
+            self.sources.get(source),
+            Some(AssetStatus::Ready(_) | AssetStatus::Failed)
+        )
     }
     pub(crate) fn measure_invalidations(
         &self,

@@ -626,6 +626,9 @@ pub struct NodeRuntime {
     pub mouse_down_active: bool,
     pub focused_active: bool,
     pub scrollbar_hover_axis: Option<ScrollbarHoverAxis>,
+    /// The image source an element showed before its `image_src` (first) or background image
+    /// (second) changed; drawn until the new source is ready.
+    pub image_fallbacks: [Option<ImageSource>; 2],
 }
 
 #[derive(Clone, Debug)]
@@ -893,6 +896,7 @@ impl Element {
                 scrollbar_hover_axis: attrs.scrollbar_hover_axis,
                 #[cfg(not(test))]
                 scrollbar_hover_axis: None,
+                image_fallbacks: Default::default(),
             },
             layout: NodeLayoutState {
                 dimension_samples: None,
@@ -1366,6 +1370,32 @@ enum ScrollAxis {
 impl ElementTree {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Drops the image fallbacks of `ids` whose current source has loaded or failed.
+    pub(crate) fn clear_settled_image_fallbacks(
+        &mut self,
+        ids: &[NodeId],
+        settled: impl Fn(&ImageSource) -> bool,
+    ) {
+        let cleared = ids.iter().fold(false, |cleared, id| {
+            let Some(element) = self.get_mut(id) else {
+                return cleared;
+            };
+            let sources = super::attrs::image_sources(&element.spec.declared)
+                .map(|source| source.is_some_and(&settled));
+            let fallbacks = &mut element.runtime.image_fallbacks;
+            (0..2).fold(cleared, |cleared, slot| {
+                if sources[slot] && fallbacks[slot].take().is_some() {
+                    true
+                } else {
+                    cleared
+                }
+            })
+        });
+        if cleared {
+            self.frame_image_sources_dirty = true;
+        }
     }
 
     pub(crate) fn clear_length_runtime(&mut self) {

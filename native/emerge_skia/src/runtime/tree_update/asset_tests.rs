@@ -410,7 +410,10 @@ fn successive_same_sized_background_sources_draw_on_completion_without_animation
                 )
                 .unwrap(),
         );
-        assert_eq!(pending.scene.summary().images, 0);
+        // The previous background stays until the new source loads; the initial source never
+        // loaded, so the first change has none.
+        let previous_loaded = name != "snapshot-a";
+        assert_eq!(pending.scene.summary().images, usize::from(previous_loaded));
         register(name, false, true);
         assets::ensure_source(&ImageSource::Id(name.into()));
         let ready = output(
