@@ -30,6 +30,7 @@ pub enum AnimationCurve {
     EaseIn,
     EaseOut,
     EaseInOut,
+    EaseOutExpo,
     Spring,
 }
 
